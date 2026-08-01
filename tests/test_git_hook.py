@@ -42,20 +42,51 @@ def test_emit_commit_event_writes_sidecar_json(mock_subproc, tmp_path):
     # Mock git commands
     mock_subproc.side_effect = [
         b"abc123sha", # rev-parse
-        b"Commit message", # log
+        b"Commit message", # log --pretty=%B
+        b"2021-06-15T10:00:00-04:00", # log --pretty=%cI (council fix 4)
         b"+ diff content", # diff
         b"file1.py\nfile2.py" # diff-tree
     ]
-    
+
     git_hook.emit_commit_event(str(tmp_path))
-    
+
     pending_file = tmp_path / ".memex" / "pending_commit.json"
     assert pending_file.exists()
-    
+
     with open(pending_file, "r") as f:
         data = json.load(f)
         assert data["sha"] == "abc123sha"
         assert "file1.py" in data["files_changed"]
+
+
+def test_emit_commit_event_timestamp_is_committer_date_not_hook_run_time(tmp_path):
+    """Council fix 4: the sidecar's `timestamp` must be the commit's real
+    committer date (`git log --pretty=%cI`), not the moment the post-commit
+    hook happened to execute — replaying/backfilling history hook-runs every
+    commit within minutes of each other regardless of the commits' real
+    dates, which is what produced "five years of history, all valid_from
+    inside one 17-minute window" downstream."""
+    def side_effect(cmd, cwd=None):
+        if "--pretty=%cI" in cmd:
+            return b"2019-03-01T08:30:00+00:00"
+        if "rev-parse" in cmd:
+            return b"deadbeef"
+        if "log" in cmd:
+            return b"an old commit"
+        if "diff-tree" in cmd:
+            return b"file1.py"
+        return b"+ diff"
+
+    with patch("subprocess.check_output", side_effect=side_effect):
+        git_hook.emit_commit_event(str(tmp_path))
+
+    pending_file = tmp_path / ".memex" / "pending_commit.json"
+    with open(pending_file, "r") as f:
+        data = json.load(f)
+    assert data["timestamp"] == "2019-03-01T08:30:00+00:00"
+    # Parseable by CommitPoller's datetime.fromisoformat().
+    from datetime import datetime
+    datetime.fromisoformat(data["timestamp"])
 
 def test_emit_commit_event_no_memex_dir(tmp_path):
     # .memex should be created if not exists
@@ -76,6 +107,7 @@ def test_emit_commit_event_initial_commit(mock_subproc, tmp_path):
         if "HEAD~1" in cmd:
             raise subprocess.CalledProcessError(1, cmd)
         if "rev-parse" in cmd: return b"sha123"
+        if "--pretty=%cI" in cmd: return b"2018-01-01T00:00:00+00:00"  # checked before "log" below — both commands contain "log"
         if "log" in cmd: return b"initial commit"
         if "show" in cmd: return b"initial diff content"
         return b"file1.py"

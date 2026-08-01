@@ -17,26 +17,41 @@ def mock_client():
 
 @pytest.mark.asyncio
 async def test_write_symbol_delta_added(mock_client):
+    """Council fix 6: an added symbol no longer writes a companion NL episode
+    — it is only ever the deterministic structured MERGE (see
+    test_write_symbol_delta_added_materializes_structured_node below for the
+    property-level assertions)."""
     sym = ExtractedSymbol(name="test_fn", kind="fn", signature="def test_fn()", file="test.py", line=10)
     delta = SymbolDelta(added=[sym], removed=[], modified=[])
-    
+
     await write_symbol_delta(delta, source_commit="abc")
-    
-    mock_client.add_episode.assert_called_once()
-    assert "test_fn" in mock_client.add_episode.call_args[1]["name"]
-    assert "abc" in mock_client.add_episode.call_args[1]["source_description"]
+
+    mock_client.add_episode.assert_not_called()
+    mock_client.driver.execute_query.assert_awaited_once()
+    params = mock_client.driver.execute_query.call_args.kwargs["params"]
+    assert params["name"] == "test_fn"
+    assert params["source_commit"] == "abc"
 
 @pytest.mark.asyncio
 async def test_write_symbol_delta_added_materializes_structured_node(mock_client):
-    """v0.3.7 Layer 1 — an added symbol must reach Neo4j as a *structured*,
-    queryable node (type='Symbol' with `file`, `kind`, `line`, `repo_path`),
-    not only as Graphiti NL prose.
+    """v0.3.7 Layer 1 — an added symbol must reach the graph as a
+    *structured*, queryable node (type='Symbol' with `file`, `kind`, `line`,
+    `repo_path`).
 
     This is the test that would have caught the predict_impact dead-tool bug:
     `predict_impact` does `MATCH (src:Entity) WHERE src.file=$file
     AND src.repo_path=$repo`, but the writer only ever called add_episode,
     so no node carried a `file` prop and the tool returned empty for every
-    file. See docs/BUG_0.3.6.md."""
+    file. See docs/BUG_0.3.6.md.
+
+    Council fix 6: there is no longer a companion NL episode at all (there
+    used to be one per symbol — six council seats found independently that
+    it burned ~7 days of GPU across a full code ingest restating facts
+    already deterministic on the node, created a duplicate unlinked node,
+    and polluted the entity namespace with literal "Symbol X" entities).
+    `uuid`/`group_id`/`summary` are written directly on the structured node
+    instead — the missing `group_id`, not a missing embedding, was the hard
+    gate excluding Symbol nodes from every graphiti search path."""
     sym = ExtractedSymbol(
         name="login", kind="fn", signature="def login(user)",
         file="memex/auth.py", line=42,
@@ -45,17 +60,18 @@ async def test_write_symbol_delta_added_materializes_structured_node(mock_client
 
     await write_symbol_delta(delta, source_commit="abc1234", repo_root="D:/memex")
 
-    # NL episode still written (Graphiti search surface preserved).
-    mock_client.add_episode.assert_awaited_once()
+    # No NL episode at all any more.
+    mock_client.add_episode.assert_not_called()
 
-    # AND a post-hoc Cypher MERGE materialized the structured node.
-    mock_client.driver.execute_query.assert_awaited()
+    # The structured MERGE materialized the node, carrying identity/partition
+    # (fix 6) alongside the pre-existing file/kind/line props (v0.3.7).
+    mock_client.driver.execute_query.assert_awaited_once()
     query_text = mock_client.driver.execute_query.call_args.args[0]
     params = mock_client.driver.execute_query.call_args.kwargs["params"]
 
     assert "MERGE" in query_text
     assert "Symbol" in query_text  # type set to 'Symbol'
-    for prop in ("file", "kind", "line"):
+    for prop in ("file", "kind", "line", "group_id", "uuid", "summary"):
         assert prop in query_text, f"structured MERGE missing {prop}"
 
     assert params["name"] == "login"
@@ -63,15 +79,18 @@ async def test_write_symbol_delta_added_materializes_structured_node(mock_client
     assert params["kind"] == "fn"
     assert params["line"] == 42
     assert params["repo"] == "D:/memex"
+    assert params["uuid"]  # a real identity, not blank
+    assert "login" in params["summary"]
 
 
 @pytest.mark.asyncio
-async def test_write_symbol_delta_materializes_node_even_if_episode_fails(mock_client):
-    """The structured Symbol node feeds predict_impact (CPU-only) and must NOT
-    be hostage to the Gemini quota. If add_episode raises (e.g. 429 spend cap),
-    the deterministic MERGE must still land and write_symbol_delta must not
-    raise. Regression guard for the v0.3.7 live-verify finding."""
-    mock_client.add_episode.side_effect = Exception("429 RESOURCE_EXHAUSTED")
+async def test_write_symbol_delta_survives_structured_merge_failure(mock_client):
+    """Council fix 6 removed the NL-episode fallback path, so the structured
+    MERGE is now the symbol's ONLY write. If FalkorDB rejects it (transient
+    error), write_symbol_delta must still log and move on rather than raise —
+    mirrors write_decision's equivalent guard
+    (test_write_decision_logs_warning_when_structured_merge_fails)."""
+    mock_client.driver.execute_query.side_effect = Exception("transient FalkorDB error")
 
     sym = ExtractedSymbol(
         name="login", kind="fn", signature="def login(user)",
@@ -79,13 +98,10 @@ async def test_write_symbol_delta_materializes_node_even_if_episode_fails(mock_c
     )
     delta = SymbolDelta(added=[sym], removed=[], modified=[])
 
-    # Must not raise despite the LLM failure.
+    # Must not raise.
     await write_symbol_delta(delta, repo_root="D:/memex")
 
-    # The structured MERGE still fired.
     mock_client.driver.execute_query.assert_awaited()
-    query_text = mock_client.driver.execute_query.call_args.args[0]
-    assert "MERGE" in query_text and "Symbol" in query_text
 
 
 @pytest.mark.asyncio
@@ -131,10 +147,69 @@ async def test_write_decision_validation_error(mock_client):
     decision.text = ""
     decision.rationale = "Because"
     decision.scope = "local"
-    
+
     with pytest.raises(MemexSchemaError) as excinfo:
         await write_decision(decision, modules=["a.py"], commit_sha="12345678")
     assert "DecisionNode" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_write_decision_writes_motivates_edge_to_changed_modules(mock_client):
+    """Council fix 1 (the rationale link) — the single highest-value repair
+    in the #783 council set. Verified live for weeks that all Decision nodes
+    had ZERO edges of any type: the commit's changed-file list was already in
+    memory at write time and was discarded into an f-string instead of being
+    used to link the Decision to the Module(s) it motivated. This must now
+    happen in the SAME query/transaction as the Decision MERGE (one
+    execute_query call, not two)."""
+    decision = MagicMock()
+    decision.text = "switch to structured logging"
+    decision.rationale = "easier to grep in Loki"
+    decision.scope = "module"
+
+    await write_decision(
+        decision, modules=["memex/watcher/handlers.py", "memex/graph/writer.py"],
+        commit_sha="cafef00d", repo_root="D:/memex",
+    )
+
+    mock_client.driver.execute_query.assert_awaited_once()
+    query_text = mock_client.driver.execute_query.call_args.args[0]
+    params = mock_client.driver.execute_query.call_args.kwargs["params"]
+
+    assert "UNWIND" in query_text
+    assert "MOTIVATES" in query_text
+    assert "MERGE (m:Entity" in query_text  # Module join target
+    assert params["modules"] == ["memex/watcher/handlers.py", "memex/graph/writer.py"]
+    assert params["repo"] == "D:/memex"
+
+
+@pytest.mark.asyncio
+async def test_write_decision_uuid_is_deterministic_not_random(mock_client):
+    """Council fix 2 — Decision identity. writer.py used to mint a fresh
+    uuid4() on every call and feed it into the MERGE key, so the MERGE could
+    never match itself twice (CREATE in costume, measured live: 19 Decision
+    nodes for 5 distinct names). Two calls with the same (repo, commit_sha,
+    decision text) must now produce the SAME uuid, so a resumed multi-day
+    ingest reinforces the existing node instead of forking a duplicate."""
+    decision = MagicMock()
+    decision.text = "identical decision text"
+    decision.rationale = "same reason"
+    decision.scope = "local"
+
+    await write_decision(decision, modules=["a.py"], commit_sha="deadbeef", repo_root="D:/repo")
+    first_uuid = mock_client.driver.execute_query.call_args.kwargs["params"]["uuid"]
+
+    await write_decision(decision, modules=["a.py"], commit_sha="deadbeef", repo_root="D:/repo")
+    second_uuid = mock_client.driver.execute_query.call_args.kwargs["params"]["uuid"]
+
+    assert first_uuid == second_uuid
+    import uuid as _uuid
+    assert _uuid.UUID(first_uuid).version == 5
+
+    # A different repo (or commit, or text) must NOT collide.
+    await write_decision(decision, modules=["a.py"], commit_sha="deadbeef", repo_root="D:/other-repo")
+    third_uuid = mock_client.driver.execute_query.call_args.kwargs["params"]["uuid"]
+    assert third_uuid != first_uuid
 
 @pytest.mark.asyncio
 async def test_write_call_edges_merges_calls_relationship(mock_client):

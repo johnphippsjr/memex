@@ -100,8 +100,14 @@ async def corroborate_decisions(repo_root: str, sha: str, message: str, files_ch
       AND (d.validated IS NULL OR d.validated = false)
     OPTIONAL MATCH (d)-[:MOTIVATES|RELATES_TO|MENTIONS]-(m:Entity)
     WHERE coalesce(m.type, '') = 'Module' OR m.name ENDS WITH '.py' OR m.name ENDS WITH '.js'
-    RETURN d.uuid as id, d.name as text, collect(m.name) as related_entities
+    RETURN d.uuid as id, d.text as text, collect(m.name) as related_entities
     """
+    # Council fix 3: was `d.name as text`. d.name is the opaque stub
+    # `decision_<sha8>` (writer.py's write_decision), so the embedding below
+    # was comparing a hex identifier against the commit message — it could
+    # never exceed the 0.6 similarity threshold. d.text is the decision's
+    # real content. This alone still can't fire without fix 1 (the MOTIVATES
+    # edge) clearing the `if not related_entities: continue` gate just below.
     
     try:
         res = await client.driver.execute_query(query)
@@ -244,7 +250,13 @@ async def handle_file_change(event: FileChangeEvent) -> None:
             return
 
         # 4. Call write_symbol_delta
-        summary = await write_symbol_delta(delta, source_commit=None, repo_root=repo_canon)
+        # Council fix 4: thread the real detection time through instead of
+        # letting write_symbol_delta stamp a second, independently-taken
+        # datetime.now(UTC) a moment later.
+        summary = await write_symbol_delta(
+            delta, source_commit=None, repo_root=repo_canon,
+            commit_time=event.timestamp,
+        )
         logger.info(
             "symbols updated for %s: +%d -%d ~%d",
             rel_path, len(delta.added), len(delta.removed), len(delta.modified)
@@ -286,19 +298,31 @@ async def handle_commit(event: CommitEvent) -> None:
     Connects git commits to the decision synthesis pipeline.
     """
     try:
+        # Canonical join key (B1) — MUST match write_lockfile_delta's Module
+        # nodes or fix 1's MOTIVATES edge lands on a different Entity than
+        # the one IMPORTS edges point at for the same file.
+        repo_canon = canonical_repo_path(event.repo_root)
+
         # 1. Call extract_decisions
         try:
             decisions = await extract_decisions(event.message, event.diff, event.sha)
         except Exception:
             logger.error("Decision extraction failed for %s", event.sha, exc_info=True)
             return
-        
+
         # 2. Write decisions
+        # Council fix 4: event.timestamp is the real commit time (see
+        # watcher/git_hook.py's emit_commit_event) — previously read nowhere
+        # in this function, so write_decision always fell back to
+        # datetime.now(UTC) regardless of which commit was being processed.
         count = 0
         if decisions:
             for decision in decisions:
                 try:
-                    await write_decision(decision, event.files_changed, event.sha)
+                    await write_decision(
+                        decision, event.files_changed, event.sha,
+                        repo_root=repo_canon, commit_time=event.timestamp,
+                    )
                     count += 1
                 except Exception:
                     logger.error("Failed to write decision '%s'", decision.text, exc_info=True)

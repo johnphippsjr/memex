@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import uuid as uuid_module
 from datetime import datetime, UTC
@@ -8,6 +9,23 @@ from memex.graph.schema import SymbolNode, DecisionNode, Dependency
 from memex.extractor.treesitter import SymbolDelta
 
 logger = logging.getLogger(__name__)
+
+#: Fixed namespace for Decision identity (council fix 2). Any constant UUID
+#: works here — it only has to be stable across processes/runs so that
+#: uuid5(namespace, key) is reproducible, never that it means anything on
+#: its own.
+_DECISION_UUID_NAMESPACE = uuid_module.uuid5(
+    uuid_module.NAMESPACE_URL, "https://github.com/johnphippsjr/memex/decision"
+)
+
+
+def _decision_identity_slug(text: str) -> str:
+    """Short, stable fingerprint of a decision's text — used ONLY as part of
+    the uuid5 identity key below, never displayed (that's d.text, fix 3).
+    Needed because multiple distinct decisions are routinely synthesized
+    from the SAME commit; keying identity on commit_sha alone (the previous
+    episode_name scheme) collapsed them all onto one stub name."""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
 
 class MemexSchemaError(Exception):
     """Raised when node data fails Pydantic validation."""
@@ -28,6 +46,15 @@ class MemexWriteError(Exception):
 #: `repo_path`) are never parsed out of NL prose, so we write them inline.
 #: Without this, `predict_impact`'s `MATCH (src:Entity) WHERE src.file=$file`
 #: matches nothing and the tool returns empty for every file (BUG_0.3.6.md).
+#: uuid/group_id are set ON CREATE ONLY — identity and graph partition must
+#: never churn on a re-index. summary is refreshed on every MATCH alongside
+#: kind/signature/line so it stays accurate to the symbol's current shape.
+#: Council fix 6: these three properties replace the deleted Symbol NL
+#: episode (see write_symbol_delta below) — the council found the missing
+#: `group_id`, NOT a missing embedding, is the hard gate that excluded every
+#: Symbol node from every graphiti search path. Deliberately no `:Symbol`
+#: label and no `name_embedding` — the label question is blocked on board
+#: #782's one-write test and is out of scope here.
 _SYMBOL_MERGE_QUERY = """
 MERGE (s:Entity {name: $name, file: $file, repo_path: $repo})
   ON CREATE SET s.type = 'Symbol',
@@ -39,21 +66,35 @@ MERGE (s:Entity {name: $name, file: $file, repo_path: $repo})
                 s.source_commit = $source_commit,
                 s.write_policy = 'locked',
                 s.access_count = 0,
-                s.last_reinforced_at = $now
+                s.last_reinforced_at = $now,
+                s.uuid = $uuid,
+                s.group_id = $group_id,
+                s.summary = $summary
   ON MATCH SET  s.type = 'Symbol',
                 s.kind = $kind,
                 s.signature = $signature,
                 s.line = $line,
                 s.valid_until = NULL,
                 s.source_commit = coalesce($source_commit, s.source_commit),
-                s.last_reinforced_at = $now
+                s.last_reinforced_at = $now,
+                s.summary = $summary
 """
 
 
 async def _merge_structured_symbol(
-    client, sym, repo_root: str | None, now, source_commit: str | None
+    client, sym, repo_root: str | None, now, source_commit: str | None,
+    group_id: str | None = None,
 ) -> None:
-    """Materialize a queryable Symbol node alongside its NL episode."""
+    """Materialize a queryable Symbol node.
+
+    Council fix 6: this is now the SYMBOL'S ONLY WRITE — no companion NL
+    episode (see write_symbol_delta's docstring). `summary` is a deterministic
+    string built from already-known fields, not an LLM restatement, so this
+    remains zero-GPU exactly like the rest of this file's structured writes.
+    """
+    summary = f"{sym.kind} {sym.name} in {sym.file}" + (
+        f", line {sym.line}" if sym.line else ""
+    )
     try:
         await client.driver.execute_query(
             _SYMBOL_MERGE_QUERY,
@@ -66,6 +107,9 @@ async def _merge_structured_symbol(
                 "line": sym.line,
                 "now": now,
                 "source_commit": source_commit,
+                "uuid": str(uuid_module.uuid4()),
+                "group_id": group_id,
+                "summary": summary,
             },
         )
     except Exception:
@@ -82,20 +126,38 @@ async def write_symbol_delta(
     delta: SymbolDelta,
     source_commit: str | None = None,
     repo_root: str | None = None,
+    commit_time: datetime | None = None,
 ) -> None:
     """
     Writes a SymbolDelta to Graphiti.
 
-    Each added/modified symbol is written twice, by design:
-      1. ``add_episode`` — NL prose so Graphiti's search/embeddings see it.
-      2. a post-hoc structured MERGE (:Entity {type:'Symbol'}) carrying the
-         queryable ``file``/``kind``/``line``/``repo_path`` props that
-         ``predict_impact`` traverses. (v0.3.7 Layer 1)
+    Each added/modified symbol is written ONCE, as a deterministic structured
+    MERGE (:Entity {type:'Symbol'}) carrying the queryable ``file``/``kind``/
+    ``line``/``repo_path`` props ``predict_impact`` traverses, plus ``uuid``/
+    ``group_id``/``summary`` (v0.3.7 Layer 1 + council fix 6).
+
+    Council fix 6 — there is deliberately NO companion NL ``add_episode`` call
+    here any more (there used to be one per symbol). Six council seats found
+    it independently: it burned roughly seven days of GPU across a full code
+    ingest to have an LLM restate facts already deterministic on the node; it
+    created a DUPLICATE, unlinked node because Symbol nodes are invisible to
+    graphiti's own dedup (no name_embedding); and it polluted the entity
+    namespace (13.4% of extracted entities came back literally named
+    "Symbol X"). ``group_id`` is written directly on the structured node
+    instead — the council established that the missing ``group_id``, not a
+    missing embedding, was the hard gate excluding these nodes from every
+    graphiti search path.
+
+    Council fix 4 — ``commit_time``, when the caller has a real one (a
+    commit's actual date, or the moment a live file-change was detected),
+    is used as the node's ``valid_from``/``last_reinforced_at`` anchor
+    instead of a fresh ``datetime.now(UTC)`` call. Without this, replaying
+    years of git history stamps every symbol with the ingestion wall-clock
+    time it happened to be processed at, not the time it was true from.
     """
     client = await get_graph_client()
     config = get_config()
-    now = datetime.now(UTC)
-    episodes_skipped = 0
+    now = commit_time or datetime.now(UTC)
 
     # 1. Added symbols
     for sym in delta.added:
@@ -113,41 +175,20 @@ async def write_symbol_delta(
         except ValidationError as e:
             raise MemexSchemaError("SymbolNode", e.errors())
 
-        # Deterministic, LLM-free structured node FIRST — predict_impact depends
-        # on it and must not be blocked by Gemini quota / rate limits.
-        await _merge_structured_symbol(client, sym, repo_root, now, source_commit)
-
-        # NL episode is a best-effort search surface. If the LLM extraction
-        # fails (e.g. 429 spend cap) we log and move on — the structured node
-        # above is already persisted.
-        try:
-            await client.add_episode(
-                name=sym.name,
-                episode_body=f"Symbol {sym.name} ({sym.kind}) added to {sym.file}. Signature: {sym.signature}. Line: {sym.line}",
-                source_description=f"tree-sitter parse{' (commit ' + source_commit + ')' if source_commit else ''}",
-                reference_time=now,
-                # Pinned to the unified graph partition (falkordb-litellm
-                # fork) so entity resolution/dedup considers the mem0 seed's
-                # existing entities as merge candidates. project_id / repo
-                # remain node ATTRIBUTES (see _merge_structured_symbol above)
-                # so per-repo filtering still works within the one graph.
-                group_id=config.unified_group_id,
-            )
-        except Exception:
-            episodes_skipped += 1
-            logger.warning(
-                "add_episode failed for symbol %s (%s); structured node was "
-                "still written, NL search surface skipped",
-                sym.name,
-                sym.file,
-                exc_info=True,
-            )
+        # Deterministic, LLM-free structured node — the only write for this
+        # symbol now (see docstring above).
+        await _merge_structured_symbol(
+            client, sym, repo_root, now, source_commit,
+            group_id=config.unified_group_id,
+        )
 
     # 1b. Modified symbols — refresh the structured node's signature/line so
-    # predict_impact sees current shape. No new episode (the symbol already
-    # has one); just keep the queryable node accurate.
+    # predict_impact sees current shape.
     for sym in delta.modified:
-        await _merge_structured_symbol(client, sym, repo_root, now, source_commit)
+        await _merge_structured_symbol(
+            client, sym, repo_root, now, source_commit,
+            group_id=config.unified_group_id,
+        )
 
     # 2. Removed symbols
     for sym in delta.removed:
@@ -165,7 +206,10 @@ async def write_symbol_delta(
 
     return {
         "symbols": len(delta.added) + len(delta.modified),
-        "episodes_skipped": episodes_skipped,
+        # No NL episode is attempted for symbols any more (fix 6), so this is
+        # always 0. Kept in the summary dict so callers/health.record's
+        # existing key doesn't disappear out from under them.
+        "episodes_skipped": 0,
     }
 
 #: CALLS-edge MERGE. Resolution is deliberately CONSERVATIVE: a call-site's
@@ -239,13 +283,34 @@ async def write_call_edges(calls, repo_root: str | None = None) -> int:
     return written
 
 
-#: Structured Decision node — created directly with a self-generated uuid,
-#: mirroring _SYMBOL_MERGE_QUERY's pattern for Symbols. See write_decision's
-#: comment for why this replaced a post-hoc SET keyed off add_episode()'s
-#: episode.uuid (that uuid belongs to the :Episodic node, never to an
-#: :Entity, so it could never match `MATCH (d:Entity)` — the label every
-#: decision-reading query in mcp_server/queries.py and tools_write.py
-#: requires).
+#: Structured Decision node + THE RATIONALE LINK, in one transaction.
+#:
+#: Council fix 1 (the rationale link — the operator's primary goal): all 19
+#: Decision nodes were verified live to have ZERO edges of any type. The
+#: commit's changed-file list (`modules`, from CommitEvent.files_changed) was
+#: already in memory at write time and simply discarded into an f-string.
+#: This query now MERGEs a MOTIVATES edge from the Decision to a Module
+#: Entity for every changed file. The join target — `:Entity {type:'Module',
+#: name:<repo-relative path>, repo_path}` — is the SAME node/key
+#: write_lockfile_delta's IMPORTS-edge query already MERGEs (writer.py's
+#: edge_query below), so whichever subsystem runs first creates the stub and
+#: the other reinforces it; there is nothing new to keep in sync.
+#: corroborate_decisions (watcher/handlers.py) requires exactly this edge
+#: shape for its Pass 1 file-match gate.
+#:
+#: Council fix 2 (Decision identity): $uuid is now uuid5(repo, commit_sha,
+#: text-slug) — deterministic — instead of a fresh uuid4() minted on every
+#: call. uuid4-in-a-MERGE-key can never match itself twice (CREATE in
+#: costume, measured: 19 Decision nodes for 5 distinct names); uuid5 lets a
+#: resumed multi-day ingest MERGE the same node instead of forking a
+#: duplicate. The ON MATCH branch below — previously absent entirely — is
+#: what makes that MERGE meaningful instead of a no-op.
+#:
+#: See write_decision's docstring for why this replaced a post-hoc SET keyed
+#: off add_episode()'s episode.uuid (that uuid belongs to the :Episodic node,
+#: never to an :Entity, so it could never match `MATCH (d:Entity)` — the
+#: label every decision-reading query in mcp_server/queries.py and
+#: tools_write.py requires).
 _DECISION_MERGE_QUERY = """
 MERGE (d:Entity {uuid: $uuid})
   ON CREATE SET d.type = 'Decision',
@@ -262,16 +327,46 @@ MERGE (d:Entity {uuid: $uuid})
                 d.base_confidence = $base_confidence,
                 d.write_policy = 'open',
                 d.access_count = 0
+  ON MATCH SET  d.last_reinforced_at = $now,
+                d.access_count = coalesce(d.access_count, 0) + 1,
+                d.source_commit = coalesce(d.source_commit, $source_commit)
+WITH d
+UNWIND $modules AS module_path
+MERGE (m:Entity {name: module_path, repo_path: $repo})
+  ON CREATE SET m.type = 'Module',
+                m.created_at = $now,
+                m.write_policy = 'locked',
+                m.access_count = 0
+MERGE (d)-[r:MOTIVATES]->(m)
+  ON CREATE SET r.created_at = $now,
+                r.expired_at = NULL
+  ON MATCH SET  r.last_reinforced_at = $now,
+                r.expired_at = NULL
 """
 
 
-async def write_decision(decision, modules: list[str], commit_sha: str, confidence: float = 1.0, source: str = "watcher") -> None:
+async def write_decision(
+    decision,
+    modules: list[str],
+    commit_sha: str,
+    confidence: float = 1.0,
+    source: str = "watcher",
+    repo_root: str | None = None,
+    commit_time: datetime | None = None,
+) -> None:
     """
-    Writes a technical decision to Graphiti.
+    Writes a technical decision to Graphiti, plus its MOTIVATES edges to the
+    changed modules (council fix 1) under a deterministic identity (council
+    fix 2). ``repo_root`` should be the SAME canonicalized repo path
+    write_lockfile_delta's Module nodes use, or the MOTIVATES edge's Module
+    endpoint will not be the same node as the one IMPORTS edges point at.
+    ``commit_time``, when known (the commit's real authored/committed time —
+    see watcher/git_hook.py), anchors this decision's reference_time/
+    created_at instead of the ingestion wall-clock time (council fix 4).
     """
     client = await get_graph_client()
     config = get_config()
-    now = datetime.now(UTC)
+    now = commit_time or datetime.now(UTC)
 
     # v0.3.0: preserve any v0.3.0 fields set by the synthesizer (validated,
     # base_confidence) and seed last_reinforced_at = created_at so the
@@ -363,7 +458,12 @@ async def write_decision(decision, modules: list[str], commit_sha: str, confiden
     # ambiguous, never requires a second lookup), is the only shape that
     # actually satisfies them. Best-effort: a failure here is logged, not
     # raised, matching every other structured-write call site in this file.
-    decision_uuid = str(uuid_module.uuid4())
+    # Council fix 2: deterministic uuid5(repo, commit_sha, text-slug) rather
+    # than a fresh uuid4() per call — see _DECISION_MERGE_QUERY's docstring.
+    decision_uuid = str(uuid_module.uuid5(
+        _DECISION_UUID_NAMESPACE,
+        f"{repo_root or ''}|{commit_sha}|{_decision_identity_slug(decision.text)}",
+    ))
     try:
         await client.driver.execute_query(
             _DECISION_MERGE_QUERY,
@@ -379,13 +479,18 @@ async def write_decision(decision, modules: list[str], commit_sha: str, confiden
                 "confidence": confidence,
                 "validated": validated,
                 "base_confidence": base_confidence,
+                # Council fix 1 — the rationale link: MOTIVATES edges to
+                # every changed-file Module, written in this same query/
+                # transaction. See _DECISION_MERGE_QUERY's docstring.
+                "modules": modules or [],
+                "repo": repo_root,
             },
         )
     except Exception:
         logger.warning(
             "structured Decision MERGE failed for %s; the decision's NL "
-            "episode is still written but type='Decision' metadata is "
-            "missing until backfilled",
+            "episode is still written but type='Decision' metadata and its "
+            "MOTIVATES edges are missing until backfilled",
             episode_name,
             exc_info=True,
         )

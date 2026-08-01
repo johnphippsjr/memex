@@ -103,6 +103,26 @@ def _make_mock_client_with_decisions(decisions):
 
 
 @pytest.mark.asyncio
+async def test_corroboration_reads_d_text_not_d_name():
+    """Council fix 3 — corroborate_decisions used to SELECT `d.name as text`,
+    and d.name is the opaque stub `decision_<sha8>` (writer.py's
+    write_decision), so the embedding call a few lines later compared a hex
+    identifier against the commit message and could never clear the 0.6
+    similarity threshold. The select query must now read `d.text as text`."""
+    mock_client, _ = _make_mock_client_with_decisions([])
+
+    with patch("memex.watcher.handlers.get_graph_client", return_value=mock_client):
+        await corroborate_decisions(
+            repo_root=".", sha="abc", message="anything", files_changed=[],
+        )
+
+    select_call = mock_client.driver.execute_query.call_args_list[0]
+    query_text = select_call.args[0] if select_call.args else select_call.kwargs.get("query", "")
+    assert "d.text as text" in query_text
+    assert "d.name as text" not in query_text
+
+
+@pytest.mark.asyncio
 async def test_corroboration_lifts_last_reinforced_at():
     """When the corroboration matcher fires, the SET clause must include
     ``d.last_reinforced_at = $now``."""

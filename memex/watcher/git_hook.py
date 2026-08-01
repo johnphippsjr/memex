@@ -3,7 +3,6 @@ import os
 import subprocess
 import sys
 import logging
-from datetime import datetime, UTC
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -39,7 +38,14 @@ def emit_commit_event(repo_root: str) -> None:
     try:
         sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root).decode().strip()
         message = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], cwd=repo_root).decode().strip()
-        
+        # Council fix 4: the commit's real committer date (ISO-8601, so
+        # CommitPoller's datetime.fromisoformat() parses it directly) — NOT
+        # datetime.now(UTC), which stamps whenever the hook happened to run.
+        # A replayed/backfilled history hook-runs every commit within
+        # minutes of each other, so this was the root cause of "five years
+        # of commits, all valid_from inside one 17-minute window".
+        commit_time = subprocess.check_output(["git", "log", "-1", "--pretty=%cI"], cwd=repo_root).decode().strip()
+
         # Try to get diff between current and previous
         try:
             diff = subprocess.check_output(["git", "diff", "HEAD~1", "HEAD"], cwd=repo_root).decode().strip()
@@ -48,13 +54,13 @@ def emit_commit_event(repo_root: str) -> None:
             # Fallback for initial commit (no HEAD~1)
             diff = subprocess.check_output(["git", "show", "HEAD"], cwd=repo_root).decode().strip()
             files_changed = subprocess.check_output(["git", "show", "--pretty=", "--name-only", "HEAD"], cwd=repo_root).decode().strip().split("\n")
-            
+
         event_data = {
             "sha": sha,
             "message": message,
             "diff": diff,
             "files_changed": files_changed,
-            "timestamp": datetime.now(UTC).isoformat()
+            "timestamp": commit_time,
         }
 
         memex_dir = Path(repo_root) / ".memex"

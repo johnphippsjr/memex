@@ -103,6 +103,26 @@ def extract_calls(file_path: str, content: str, language: str = "python") -> Lis
 
     return edges
 
+def _flatten_structure(items) -> list:
+    """Recurse into every item's children (class bodies, nested scopes) so a
+    class's methods are visited as candidate symbols in their own right, not
+    just the top-level def/class statements.
+
+    Council fix 5a: this mirrors `_flatten_functions` above, which already
+    recurses for the CALLS graph — `get_symbols_from_content` previously
+    iterated `result.structure` flat, so a class's methods were valid CALLS
+    *callers* (via _flatten_functions) but never became Symbol nodes of
+    their own (via this function): 31.9% of function-like symbols in memex
+    itself, 32.7% corpus-wide, confirmed three ways.
+    """
+    acc = []
+    for it in items:
+        acc.append(it)
+        if it.children:
+            acc.extend(_flatten_structure(it.children))
+    return acc
+
+
 def get_symbols_from_content(content: str, file_path: str, language_name: str) -> Dict[str, Symbol]:
     """
     Parses content and extracts symbols using tree-sitter-language-pack high-level API.
@@ -116,10 +136,19 @@ def get_symbols_from_content(content: str, file_path: str, language_name: str) -
         config = tslp.ProcessConfig(language=language_name)
         result = tslp.process(content, config=config)
     except Exception:
-        # If language is not supported or other error, return empty symbols
+        # Council fix 5b: this used to fail silently — a genuinely
+        # unsupported/misconfigured language returned zero symbols and the
+        # caller (extract_symbol_delta -> handle_file_change) logged a
+        # normal, successful index pass. Log loudly so a repo that silently
+        # produces zero symbols on every file is visible, not just quiet.
+        logger.warning(
+            "tree-sitter parse failed for %s (language=%s); returning zero "
+            "symbols for this file rather than raising",
+            file_path, language_name, exc_info=True,
+        )
         return symbols
 
-    for item in result.structure:
+    for item in _flatten_structure(result.structure):
         # Map tree-sitter kinds to our simple kinds
         kind_str = str(item.kind).lower()
         if "function" in kind_str or "method" in kind_str:
@@ -162,7 +191,22 @@ async def extract_symbol_delta(
             "rs": "rust",
             "go": "go"
         }
-        language = lang_map.get(ext, "python")
+        language = lang_map.get(ext)
+        if language is None:
+            # Council fix 5b: this used to default every unmapped extension
+            # (.yaml, .tf, .hcl, ...) to "python", so e.g. an infrastructure
+            # repo's YAML got parsed as Python, produced zero real symbols
+            # (a parse mismatch, not an honestly-empty file), and
+            # handle_file_change logged it as an ordinary successful index
+            # pass. Skip loudly instead of silently guessing wrong. A real
+            # YAML/HCL extractor is a separate, later task.
+            logger.warning(
+                "extract_symbol_delta: no tree-sitter grammar mapped for "
+                "extension '.%s' (file=%s) — skipping symbol extraction "
+                "for this file instead of silently parsing it as Python",
+                ext, file_path,
+            )
+            return SymbolDelta()
 
     old_symbols = get_symbols_from_content(old_content, file_path, language)
     new_symbols = get_symbols_from_content(new_content, file_path, language)

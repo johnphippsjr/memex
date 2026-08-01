@@ -52,10 +52,17 @@ class Greeter:
         pass
 """
     delta = await extract_symbol_delta("test.py", old_content, new_content)
-    
-    assert len(delta.added) == 2
+
+    # Council fix 5a: get_symbols_from_content now recurses into class
+    # bodies (mirroring _flatten_functions' existing recursion for the CALLS
+    # graph), so Greeter.__init__ is captured as its own Symbol alongside
+    # the module-level `hello` function and the `Greeter` class itself —
+    # previously it was silently dropped (31.9%/32.7% of function-like
+    # symbols corpus-wide, per the council measurement).
+    assert len(delta.added) == 3
     assert any(s.name == "hello" and s.kind == "fn" for s in delta.added)
     assert any(s.name == "Greeter" and s.kind == "class" for s in delta.added)
+    assert any(s.name == "__init__" and s.kind == "fn" for s in delta.added)
     assert len(delta.removed) == 0
     assert len(delta.modified) == 0
 

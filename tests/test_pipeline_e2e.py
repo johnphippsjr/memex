@@ -37,7 +37,9 @@ class AuthManager:
     # 2. Extract Code Changes
     print(f"\n[1/3] Extracting symbol delta for {file_path}...")
     delta = await extract_symbol_delta(file_path, old_content, new_content)
-    assert len(delta.added) == 2
+    # Council fix 5a: AuthManager.__init__ is now also captured (recursion
+    # into class bodies), alongside validate_token and AuthManager itself.
+    assert len(delta.added) == 3
     
     # 3. Extract Decisions using Gemini
     print("[2/3] Extracting decisions using Gemini Flash...")
