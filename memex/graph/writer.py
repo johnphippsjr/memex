@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, UTC
 from pydantic import ValidationError
+from memex.config import get_config
 from memex.graph.client import get_graph_client
 from memex.graph.schema import SymbolNode, DecisionNode, Dependency
 from memex.extractor.treesitter import SymbolDelta
@@ -91,6 +92,7 @@ async def write_symbol_delta(
          ``predict_impact`` traverses. (v0.3.7 Layer 1)
     """
     client = await get_graph_client()
+    config = get_config()
     now = datetime.now(UTC)
     episodes_skipped = 0
 
@@ -122,7 +124,13 @@ async def write_symbol_delta(
                 name=sym.name,
                 episode_body=f"Symbol {sym.name} ({sym.kind}) added to {sym.file}. Signature: {sym.signature}. Line: {sym.line}",
                 source_description=f"tree-sitter parse{' (commit ' + source_commit + ')' if source_commit else ''}",
-                reference_time=now
+                reference_time=now,
+                # Pinned to the unified graph partition (falkordb-litellm
+                # fork) so entity resolution/dedup considers the mem0 seed's
+                # existing entities as merge candidates. project_id / repo
+                # remain node ATTRIBUTES (see _merge_structured_symbol above)
+                # so per-repo filtering still works within the one graph.
+                group_id=config.unified_group_id,
             )
         except Exception:
             episodes_skipped += 1
@@ -254,6 +262,7 @@ async def write_decision(decision, modules: list[str], commit_sha: str, confiden
     Writes a technical decision to Graphiti.
     """
     client = await get_graph_client()
+    config = get_config()
     now = datetime.now(UTC)
 
     # v0.3.0: preserve any v0.3.0 fields set by the synthesizer (validated,
@@ -307,6 +316,7 @@ async def write_decision(decision, modules: list[str], commit_sha: str, confiden
         ),
         source_description=f"git commit {commit_sha}",
         reference_time=now,
+        group_id=config.unified_group_id,
     )
 
     # Post-hoc Cypher SET for programmatic flags Graphiti doesn't parse from
@@ -393,6 +403,7 @@ async def write_lockfile_delta(
     the watcher log line so re-runs are observable.
     """
     client = await get_graph_client()
+    config = get_config()
     now = datetime.now(UTC)
     deps_written = 0
     edges_written = 0
@@ -409,6 +420,7 @@ async def write_lockfile_delta(
                 ),
                 source_description=f"lockfile scan in {repo_root}",
                 reference_time=now,
+                group_id=config.unified_group_id,
             )
         except Exception:
             logger.warning(
