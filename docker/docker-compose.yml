@@ -1,18 +1,12 @@
 services:
-  neo4j:
-    image: neo4j:5.26.0-community
-    container_name: memex-neo4j
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: memex-falkordb
     ports:
-      - "7474:7474" # HTTP
-      - "7687:7687" # Bolt
-    environment:
-      # Hardcode auth to match .env precisely and avoid interpolation issues
-      - NEO4J_AUTH=neo4j/memex-local
-      - NEO4J_PLUGINS=["apoc"]
+      - "6379:6379" # Redis/FalkorDB protocol
+      - "3000:3000" # FalkorDB browser UI
     volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
+      - falkordb_data:/data
 
 volumes:
-  neo4j_data:
-  neo4j_logs:
+  falkordb_data:

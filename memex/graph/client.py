@@ -2,9 +2,11 @@ import logging
 from typing import Optional, List
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.client import CrossEncoderClient
-from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
+from graphiti_core.driver.falkordb_driver import FalkorDriver
+from graphiti_core.llm_client.openai_client import OpenAIClient
+from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from memex.config import get_config
-from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -14,27 +16,6 @@ class NoOpCrossEncoder(CrossEncoderClient):
     """
     async def rank(self, query: str, documents: List[str]) -> List[float]:
         return [0.5] * len(documents)
-
-class FixedGeminiEmbedder(GeminiEmbedder):
-    """
-    Bypasses a bug in Graphiti's GeminiEmbedder where batch embedding fails.
-    """
-    async def create_batch(self, input_data_list: list[str]) -> list[list[float]]:
-        if not input_data_list:
-            return []
-            
-        all_embeddings = []
-        for item in input_data_list:
-            result = await self.client.aio.models.embed_content(
-                model=self.config.embedding_model,
-                contents=item,
-                config=types.EmbedContentConfig(output_dimensionality=self.config.embedding_dim),
-            )
-            if result.embeddings and len(result.embeddings) > 0:
-                all_embeddings.append(result.embeddings[0].values)
-            else:
-                raise ValueError(f"No embedding returned for: {item}")
-        return all_embeddings
 
 class GraphClient:
     """
@@ -46,33 +27,58 @@ class GraphClient:
     async def get_instance(cls) -> Graphiti:
         if cls._instance is None:
             config = get_config()
-            
-            from graphiti_core.llm_client.gemini_client import GeminiClient
-            from graphiti_core.llm_client.config import LLMConfig
-            from google import genai
-            
-            # Initialize common genai client
-            genai_client = genai.Client(api_key=config.gemini_api_key)
-            
-            # Configure LLM Client
-            llm_config = LLMConfig(model=config.gemini_model)
-            llm_client = GeminiClient(config=llm_config, client=genai_client)
-            
-            # Configure Embedder
-            embedder_config = GeminiEmbedderConfig(embedding_model=config.embedding_model)
-            embedder = FixedGeminiEmbedder(config=embedder_config, client=genai_client)
-            
-            # Initialize Graphiti
+
+            # FalkorDB graph driver. `database` is the FalkorDB graph key —
+            # this MUST match config.unified_group_id (see config.py comment
+            # on falkor_graph) so every add_episode() call's explicit
+            # group_id equals the driver's already-configured database and
+            # graphiti-core never triggers its silent
+            # `self.driver.clone(database=group_id)` re-point.
+            falkor_driver = FalkorDriver(
+                host=config.falkor_host,
+                port=config.falkor_port,
+                database=config.falkor_graph,
+            )
+
+            # Configure LLM Client — LiteLLM gateway, OpenAI-compatible.
+            llm_config = LLMConfig(
+                api_key=config.litellm_api_key,
+                base_url=config.litellm_base_url,
+                model=config.litellm_model,
+            )
+            llm_client = OpenAIClient(config=llm_config)
+
+            # Configure Embedder — same gateway, bge-m3 (MUST match the
+            # model + dims the mem0 seed graph was embedded with, or the
+            # code graph's vectors live in a different space and will never
+            # actually unify with the mem0 nodes).
+            embedder_config = OpenAIEmbedderConfig(
+                embedding_model=config.embedding_model,
+                embedding_dim=config.embedding_dim,
+                api_key=config.litellm_api_key,
+                base_url=config.litellm_base_url,
+            )
+            embedder = OpenAIEmbedder(config=embedder_config)
+
+            # Initialize Graphiti. `graph_driver=` (not `uri=`) is required
+            # for a non-Neo4j backend — passing `uri="falkor://..."` is NOT
+            # supported by graphiti-core 0.29.x's Graphiti.__init__: when
+            # graph_driver is None it unconditionally builds a Neo4jDriver
+            # from uri/user/password (see graphiti_core/graphiti.py).
             cls._instance = Graphiti(
-                uri=config.neo4j_uri,
-                user=config.neo4j_user,
-                password=config.neo4j_password,
+                graph_driver=falkor_driver,
                 llm_client=llm_client,
                 embedder=embedder,
                 cross_encoder=NoOpCrossEncoder()
             )
-            logger.info("Graphiti client initialized with model %s", config.gemini_model)
-            
+            logger.info(
+                "Graphiti client initialized (FalkorDB %s:%s/%s, LiteLLM model %s)",
+                config.falkor_host,
+                config.falkor_port,
+                config.falkor_graph,
+                config.litellm_model,
+            )
+
         return cls._instance
 
     @classmethod
