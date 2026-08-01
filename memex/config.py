@@ -145,20 +145,39 @@ class RetrievalConfig(BaseModel):
 
 
 class Config(BaseModel):
-    neo4j_uri: str
-    neo4j_user: str
-    neo4j_password: str
-    gemini_api_key: str
-    neo4j_database: str = "neo4j"
-    
-    # Model configuration
-    gemini_model: str = "gemini-2.5-flash"
-    # Phase 9 — Gemini Pro used for synthesis tools (explain_change). Flash
-    # remains the default for extractive / classification tasks; Pro is used
-    # only when the tool description explicitly calls for grounded synthesis.
-    pro_model: str = "gemini-2.5-pro"
-    embedding_model: str = "models/gemini-embedding-2"
-    
+    # --- FalkorDB backend (replaces Neo4j — v0.7.0 fork: falkordb-litellm) ---
+    falkor_host: str
+    falkor_port: int = 6379
+    # 🚨 This value doubles as the Graphiti `group_id` partition threaded
+    # through every `add_episode()` call (see graph/writer.py). graphiti-core
+    # 0.29.x's `Graphiti.add_episode()` treats an explicit `group_id` as the
+    # *physical* FalkorDB database name whenever it differs from the driver's
+    # already-configured database — it calls `self.driver.clone(database=
+    # group_id)` and swaps the singleton's driver out from under it
+    # (graphiti_core/graphiti.py). `falkor_graph` and `unified_group_id` MUST
+    # always be set to the exact same string, or writes will silently
+    # fragment across two different physical graphs.
+    falkor_graph: str = "mem0-seed-local-verify"
+
+    # --- LiteLLM gateway (OpenAI-compatible) — replaces direct Gemini calls ---
+    litellm_base_url: str
+    litellm_api_key: str
+    litellm_model: str
+    # Phase 9 — grounded-synthesis model used by explain_change (previously
+    # Gemini Pro). Defaults to the same extraction model as litellm_model;
+    # override at deploy time for a stronger model if the gateway exposes one.
+    pro_model: str = "mem0-extract-35b"
+
+    # Embedding — MUST match the model + dimensionality the mem0 seed graph
+    # was built with (bge-m3, 1024-dim per the fork plan / mem0 records), or
+    # the code graph's vectors live in a different space and entity
+    # resolution/search will never actually unify with the mem0 nodes.
+    embedding_model: str = "bge-m3"
+    embedding_dim: int = 1024
+
+    # Unified-graph group_id — see the falkor_graph note above; keep identical.
+    unified_group_id: str = "mem0-seed-local-verify"
+
     # Performance & Timing
     debounce_window: float = 0.8
     poll_interval: float = 0.5
@@ -170,7 +189,7 @@ class Config(BaseModel):
 
     # Governance-report scheduling (Phase 04 / NET-16). report_hour is
     # deliberately one hour after decay_hour (research Pitfall 2) so the two
-    # jobs don't contend for the same Neo4j connection pool.
+    # jobs don't contend for the same graph-database connection pool.
     report_hour: int = 3
     report_minute: int = 0
     report_day_of_week: str = "mon"
@@ -224,13 +243,16 @@ def load_config(repo_root: Optional[str] = None) -> Config:
     """
     # Base configuration from environment variables
     env_config = {
-        "neo4j_uri": os.getenv("NEO4J_URI"),
-        "neo4j_user": os.getenv("NEO4J_USER"),
-        "neo4j_password": os.getenv("NEO4J_PASSWORD"),
-        "gemini_api_key": os.getenv("GEMINI_API_KEY"),
-        "neo4j_database": os.getenv("NEO4J_DATABASE"),
-        "gemini_model": os.getenv("GEMINI_MODEL"),
+        "falkor_host": os.getenv("FALKOR_HOST"),
+        "falkor_port": os.getenv("FALKOR_PORT"),
+        "falkor_graph": os.getenv("FALKOR_GRAPH"),
+        "litellm_base_url": os.getenv("LITELLM_BASE_URL"),
+        "litellm_api_key": os.getenv("LITELLM_API_KEY"),
+        "litellm_model": os.getenv("LITELLM_MODEL"),
+        "pro_model": os.getenv("PRO_MODEL"),
         "embedding_model": os.getenv("EMBEDDING_MODEL"),
+        "embedding_dim": os.getenv("EMBEDDING_DIM"),
+        "unified_group_id": os.getenv("UNIFIED_GROUP_ID"),
         "debounce_window": os.getenv("DEBOUNCE_WINDOW"),
         "poll_interval": os.getenv("POLL_INTERVAL"),
         "decay_hour": os.getenv("DECAY_HOUR"),
@@ -251,6 +273,8 @@ def load_config(repo_root: Optional[str] = None) -> Config:
     config_dict = {k: v for k, v in env_config.items() if v is not None}
     
     # Convert numeric strings from env to correct types for merging
+    if "falkor_port" in config_dict: config_dict["falkor_port"] = int(config_dict["falkor_port"])
+    if "embedding_dim" in config_dict: config_dict["embedding_dim"] = int(config_dict["embedding_dim"])
     if "debounce_window" in config_dict: config_dict["debounce_window"] = float(config_dict["debounce_window"])
     if "poll_interval" in config_dict: config_dict["poll_interval"] = float(config_dict["poll_interval"])
     if "decay_hour" in config_dict: config_dict["decay_hour"] = int(config_dict["decay_hour"])
@@ -273,7 +297,7 @@ def load_config(repo_root: Optional[str] = None) -> Config:
         return Config(**config_dict)
     except Exception as e:
         # Re-raise with a more helpful message if required fields are missing.
-        required_vars = ["NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD", "GEMINI_API_KEY"]
+        required_vars = ["FALKOR_HOST", "LITELLM_BASE_URL", "LITELLM_API_KEY", "LITELLM_MODEL"]
         missing = [v for v in required_vars if v.lower() not in config_dict]
         if missing:
             # Introspection-only mode: allow the server to start without a live
@@ -281,10 +305,10 @@ def load_config(repo_root: Optional[str] = None) -> Config:
             # enumerate tools. Tool calls themselves will still fail loudly.
             if os.getenv("MEMEX_INTROSPECTION_ONLY") == "1":
                 placeholders = {
-                    "neo4j_uri": "bolt://introspection-only:7687",
-                    "neo4j_user": "introspection",
-                    "neo4j_password": "introspection",
-                    "gemini_api_key": "introspection-only",
+                    "falkor_host": "introspection-only",
+                    "litellm_base_url": "http://introspection-only:4000",
+                    "litellm_api_key": "introspection-only",
+                    "litellm_model": "introspection-only",
                 }
                 for k, v in placeholders.items():
                     config_dict.setdefault(k, v)

@@ -1,10 +1,26 @@
-# Neo4j Configuration
-neo4j_uri: bolt://localhost:7687
-neo4j_user: neo4j
-neo4j_password: memex-local
+# FalkorDB Configuration (falkordb-litellm fork — replaces Neo4j)
+falkor_host: localhost
+falkor_port: 6379
+# Unified graph — MUST match unified_group_id below (see memex/config.py's
+# comment on why these two must always be identical).
+falkor_graph: mem0-seed-local-verify
 
-# Gemini Configuration
-gemini_api_key: your_gemini_api_key_here
+# LiteLLM gateway Configuration (OpenAI-compatible — replaces direct Gemini)
+litellm_base_url: http://litellm.llm-gateway.svc.cluster.local:4000
+litellm_api_key: your_litellm_key_here
+litellm_model: mem0-extract-35b
+# Grounded-synthesis model used by explain_change. Defaults to the same
+# extraction model; override with a stronger gateway model if available.
+pro_model: mem0-extract-35b
+
+# Embedding — MUST match the model + dims the mem0 seed graph was built
+# with, or vectors live in a different space and won't unify.
+embedding_model: bge-m3
+embedding_dim: 1024
+
+# Unified graph — one group_id for all repos + the mem0 seed, so entities
+# cross-link instead of being namespaced per-repo. MUST match falkor_graph.
+unified_group_id: mem0-seed-local-verify
 
 # Graphiti Configuration
 log_level: INFO
