@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 from memex.extractor.lockfile import _python_files
 from memex.graph.cluster import ClusterAssignment, run_cluster_pass
-from memex.graph.schema import Cluster, check_write_policy
+from memex.graph.schema import Cluster, check_write_policy, uuid_or_natural_key
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +308,12 @@ async def write_cluster_assignments(
         episode_uuid = getattr(getattr(result, "episode", None), "uuid", None)
         # Always upsert the cluster's canonical row by (type, name, repo_path)
         # so two episodes for the same logical cluster collapse into one node.
+        # NOTE: Cluster nodes are never given a `uuid` (see MERGE below) — the
+        # final RETURN uses uuid_or_natural_key() rather than the removed
+        # Neo4j-only identity builtin this used to fall back on. Built via
+        # plain concatenation, not str.format()/an f-string, because the
+        # query text itself contains literal Cypher `{...}` property-map
+        # syntax that either would try (and fail) to parse as a format field.
         upsert_query = """
         MERGE (c:Entity {type: 'Cluster', name: $name, repo_path: $repo})
           ON CREATE SET c.created_at = $now,
@@ -318,14 +324,13 @@ async def write_cluster_assignments(
             c.description = $description
         WITH c
         OPTIONAL MATCH (e:Entity)
-        WHERE e.uuid = $episode_uuid OR elementId(e) = $episode_uuid
+        WHERE e.uuid = $episode_uuid
         FOREACH (_ IN CASE WHEN e IS NULL OR e = c THEN [] ELSE [1] END |
             MERGE (c)-[r:DESCRIBED_BY]->(e)
               ON CREATE SET r.created_at = $now, r.expired_at = NULL
               ON MATCH SET  r.last_reinforced_at = $now, r.expired_at = NULL
         )
-        RETURN elementId(c) as cluster_id
-        """
+        RETURN """ + uuid_or_natural_key("c") + " as cluster_id"
         description = _describe_cluster(a)
         try:
             await client.driver.execute_query(

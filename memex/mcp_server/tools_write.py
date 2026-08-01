@@ -215,7 +215,7 @@ async def _check_decision_intent_confirmation(
             if cand_uuid != "unknown":
                 module_query = """
                 MATCH (d:Entity)
-                WHERE d.uuid = $uuid OR elementId(d) = $uuid
+                WHERE d.uuid = $uuid
                 OPTIONAL MATCH (d)-[:MOTIVATES|RELATES_TO|MENTIONS]-(m:Entity)
                 WHERE coalesce(m.type, '') = 'Module' OR m.name ENDS WITH '.py' OR m.name ENDS WITH '.js'
                 RETURN collect(DISTINCT m.name) as modules
@@ -271,7 +271,7 @@ async def _corroborate_decision(
 
     update_query = """
     MATCH (d:Entity)
-    WHERE d.uuid = $id OR elementId(d) = $id
+    WHERE d.uuid = $id
     SET d.last_reinforced_at = $now,
         d.access_count = coalesce(d.access_count, 0) + 1
     RETURN d.name as name
@@ -288,7 +288,7 @@ async def _corroborate_decision(
     if session_name:
         edge_query = """
         MATCH (s:Entity {name: $session_name})
-        MATCH (d:Entity) WHERE d.uuid = $id OR elementId(d) = $id
+        MATCH (d:Entity) WHERE d.uuid = $id
         MERGE (s)-[r:CORROBORATES]->(d)
         SET r.created_at = $now, r.fact = 'agent corroborated this decision'
         """
@@ -311,7 +311,7 @@ async def _supersede_decision(client, old_id: str, now: datetime) -> None:
     """
     expire_query = """
     MATCH (old:Entity)-[r]->()
-    WHERE (old.uuid = $id OR elementId(old) = $id)
+    WHERE old.uuid = $id
       AND r.expired_at IS NULL
     SET r.expired_at = $now,
         r.invalidated_by = 'agent_supersede'
@@ -405,7 +405,7 @@ async def record_decision(
         if supersedes:
             check_query = """
             MATCH (d:Entity)
-            WHERE (d.uuid = $id OR elementId(d) = $id)
+            WHERE d.uuid = $id
               AND (d.type = 'Decision' OR d.name CONTAINS 'Decision')
             RETURN d.uuid as uuid LIMIT 1
             """
@@ -484,7 +484,7 @@ async def record_decision(
                 set_clauses.append("n.project_id = $project")
                 params["project"] = project_id
             update_cypher = (
-                "MATCH (n:Entity) WHERE n.uuid = $id OR elementId(n) = $id "
+                "MATCH (n:Entity) WHERE n.uuid = $id "
                 "SET " + ", ".join(set_clauses)
             )
             await client.driver.execute_query(update_cypher, params=params)
@@ -502,7 +502,7 @@ async def record_decision(
                     link_set_clauses.append("n.project_id = $project")
                     link_params["project"] = project_id
                 await client.driver.execute_query(
-                    "MATCH (n:Entity) WHERE n.uuid = $id OR elementId(n) = $id SET "
+                    "MATCH (n:Entity) WHERE n.uuid = $id SET "
                     + ", ".join(link_set_clauses),
                     params=link_params
                 )
@@ -610,7 +610,7 @@ async def record_problem(
                 problem_set_clauses.append("n.project_id = $project")
                 problem_params["project"] = project_id
             await client.driver.execute_query(
-                "MATCH (n:Entity) WHERE n.uuid = $id OR elementId(n) = $id SET "
+                "MATCH (n:Entity) WHERE n.uuid = $id SET "
                 + ", ".join(problem_set_clauses),
                 params=problem_params
             )
@@ -628,7 +628,7 @@ async def record_problem(
                      link_set_clauses.append("n.project_id = $project")
                      link_params["project"] = project_id
                  await client.driver.execute_query(
-                    "MATCH (n:Entity) WHERE n.uuid = $id OR elementId(n) = $id SET "
+                    "MATCH (n:Entity) WHERE n.uuid = $id SET "
                     + ", ".join(link_set_clauses),
                     params=link_params
                 )
@@ -673,7 +673,7 @@ async def resolve_problem(
     # 1. Look up Problem with retries
     query = """
     MATCH (p:Entity)
-    WHERE (p.uuid = $id OR elementId(p) = $id)
+    WHERE p.uuid = $id
       AND (p.type = 'Problem' OR p.name CONTAINS 'Problem')
       AND ($repo IS NULL OR p.repo_path = $repo)
     OPTIONAL MATCH (p)-[r:RESOLVED_BY]->(s:Entity)
@@ -730,7 +730,7 @@ async def resolve_problem(
             update_params["project"] = project_id
         update_query = (
             "MATCH (p:Entity)\n"
-            "WHERE p.uuid = $id OR elementId(p) = $id\n"
+            "WHERE p.uuid = $id\n"
             "SET " + ", ".join(p_set_clauses) + "\n"
             "WITH p\n"
             "MATCH (s:Entity {name: $session_name})\n"
@@ -774,9 +774,24 @@ async def invalidate_edge(
     now = datetime.now(UTC)
 
     # 1. Look up Edge
+    #
+    # `r` here is unfiltered by relationship type, so this can match a CALLS
+    # edge (memex/graph/writer.py's write_call_edges) just as easily as a
+    # graphiti-native RELATES_TO/MENTIONS edge. Only the latter carry a
+    # `uuid` property — confirmed live against memex-fork-test-rr2: CALLS
+    # edges' full property set is exactly `{created_at, line,
+    # last_reinforced_at}`, no identifier of any kind. No memex-authored
+    # edge type (CALLS, CORROBORATES, RESOLVED_BY, CONTAINS, DESCRIBED_BY)
+    # sets a uuid on its relationships either. There is no natural key to
+    # fall back to for a bare relationship the way there is for a node
+    # (type/name/repo_path), so — per explicit instruction not to invent an
+    # id scheme here — this is `r.uuid` only. A CALLS/memex-authored edge
+    # will correctly report "not found" below rather than ever being
+    # matched by the wrong row; it can never be targeted by this function
+    # without a schema change that gives every relationship its own uuid.
     query = """
     MATCH (s:Entity)-[r]->(t:Entity)
-    WHERE elementId(r) = $id
+    WHERE r.uuid = $id
       AND ($repo IS NULL OR s.repo_path = $repo)
     RETURN s.name as source, t.name as target, type(r) as edge_type,
            r.valid_until as valid_until, r.invalidation_reason as old_reason
@@ -796,7 +811,7 @@ async def invalidate_edge(
         # 2. Update Edge
         update_query = """
         MATCH ()-[r]->()
-        WHERE elementId(r) = $id
+        WHERE r.uuid = $id
         SET r.valid_until = $now,
             r.invalidation_reason = $reason,
             r.invalidated_by = $agent

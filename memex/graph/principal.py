@@ -32,7 +32,7 @@ ON CREATE SET p.type = 'Principal',
 SET p.display_name = $display_name,
     p.role = $role,
     p.active = $active
-RETURN elementId(p) as id
+RETURN p.principal_id as id
 """
 
 

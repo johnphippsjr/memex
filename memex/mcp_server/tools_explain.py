@@ -115,7 +115,7 @@ async def _query_linked_decisions_and_problems(
             CASE WHEN d.name CONTAINS 'Problem' THEN 'Problem' ELSE 'Decision' END
         ) AS node_type,
         d.name AS text,
-        coalesce(d.uuid, elementId(d)) AS node_id,
+        d.uuid AS node_id,
         m.name AS module,
         coalesce(d.created_at, datetime()) AS date
     ORDER BY date DESC

@@ -100,7 +100,7 @@ async def corroborate_decisions(repo_root: str, sha: str, message: str, files_ch
       AND (d.validated IS NULL OR d.validated = false)
     OPTIONAL MATCH (d)-[:MOTIVATES|RELATES_TO|MENTIONS]-(m:Entity)
     WHERE coalesce(m.type, '') = 'Module' OR m.name ENDS WITH '.py' OR m.name ENDS WITH '.js'
-    RETURN d.uuid as id, elementId(d) as eid, d.name as text, collect(m.name) as related_entities
+    RETURN d.uuid as id, d.name as text, collect(m.name) as related_entities
     """
     
     try:
@@ -130,7 +130,7 @@ async def corroborate_decisions(repo_root: str, sha: str, message: str, files_ch
     CORROBORATION_SIMILARITY_THRESHOLD = 0.6
     
     for record in decisions:
-        decision_id = record["id"] or record["eid"]
+        decision_id = record["id"]
         decision_text = record["text"]
         related_entities = record["related_entities"] or []
         
@@ -165,7 +165,7 @@ async def corroborate_decisions(repo_root: str, sha: str, message: str, files_ch
 
         update_query = """
         MATCH (d:Entity)
-        WHERE d.uuid = $id OR elementId(d) = $id
+        WHERE d.uuid = $id
         SET d.last_reinforced_at = $now,
             d.corroborated = true,
             d.corroboration_commit = $sha,

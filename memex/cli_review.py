@@ -50,7 +50,7 @@ async def _fetch_pending_decisions(repo_root: str) -> list[dict[str, Any]]:
     WHERE coalesce(m.type, '') = 'Module' OR m.name ENDS WITH '.py'
     WITH d, collect(DISTINCT m.name) AS modules
     RETURN
-        coalesce(d.uuid, elementId(d)) AS id,
+        d.uuid AS id,
         d.name                          AS text,
         coalesce(d.summary, '')         AS rationale,
         coalesce(d.source_commit, '')   AS source_commit,
@@ -84,7 +84,7 @@ async def _set_validated(decision_id: str) -> None:
     now = datetime.now(timezone.utc)
     query = """
     MATCH (d:Entity)
-    WHERE d.uuid = $id OR elementId(d) = $id
+    WHERE d.uuid = $id
     SET d.validated          = true,
         d.validated_at       = $now,
         d.last_reinforced_at = $now,
@@ -104,7 +104,7 @@ async def _soft_delete(decision_id: str) -> None:
     now = datetime.now(timezone.utc)
     query = """
     MATCH (d:Entity)
-    WHERE d.uuid = $id OR elementId(d) = $id
+    WHERE d.uuid = $id
     SET d.excluded    = true,
         d.excluded_at = $now,
         d.updated_at  = $now
@@ -123,7 +123,7 @@ async def _update_text(decision_id: str, new_text: str) -> None:
     now = datetime.now(timezone.utc)
     query = """
     MATCH (d:Entity)
-    WHERE d.uuid = $id OR elementId(d) = $id
+    WHERE d.uuid = $id
     SET d.name               = $text,
         d.last_reinforced_at = $now,
         d.updated_at         = $now

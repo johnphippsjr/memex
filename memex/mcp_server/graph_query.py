@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from memex.graph.schema import uuid_or_natural_key
+
 
 async def fetch_graph_payload(client: Any, canonical_repo: str, project: Optional[str] = None) -> dict:
     """Fetches nodes + edges for the graph view, scoped by `project` (if
@@ -32,12 +34,26 @@ async def fetch_graph_payload(client: Any, canonical_repo: str, project: Optiona
     try/except + error response shaping (matches the pre-extraction inline
     behavior in `http.py`'s `/graph` route).
     """
+    # Both queries below match `:Entity` with NO type filter at all — this is
+    # the whole-graph dashboard view, so `n`/`n1`/`n2` span every node kind
+    # including Symbol/Module/Cluster, none of which memex ever gives a
+    # `uuid` (confirmed live against memex-fork-test-rr2). uuid_or_natural_key()
+    # is used instead of a bare removed-Neo4j-builtin/`.uuid` swap so those
+    # nodes get a real, distinct id instead of every one of them silently
+    # collapsing to the same null value — which would have merged all 197
+    # Symbol nodes (and any Cluster/Module nodes) in this test graph into one
+    # dashboard entry, and made every edge into/out of them unrenderable
+    # (source/target below are node ids, not relationship ids — despite this
+    # file being listed as a "relationship id" site in the original brief,
+    # `n1`/`n2` were always the two Entity endpoints of the edge `r`, not `r`
+    # itself — this file never actually referenced a relationship's own id).
+    #
     # Query nodes
     nodes_query = """
     MATCH (n:Entity)
     WHERE ($project IS NOT NULL AND n.project_id = $project) OR ($project IS NULL AND n.repo_path = $repo)
     RETURN
-      elementId(n) as id,
+      """ + uuid_or_natural_key("n") + """ as id,
       n.name as name,
       coalesce(n.type, '') as raw_type,
       coalesce(n.summary, n.description, '') as summary,
@@ -55,8 +71,8 @@ async def fetch_graph_payload(client: Any, canonical_repo: str, project: Optiona
       AND r.expired_at IS NULL
       AND r.valid_until IS NULL
     RETURN
-      elementId(n1) as source,
-      elementId(n2) as target,
+      """ + uuid_or_natural_key("n1") + """ as source,
+      """ + uuid_or_natural_key("n2") + """ as target,
       type(r) as type,
       coalesce(r.created_at, '') as created_at
     """

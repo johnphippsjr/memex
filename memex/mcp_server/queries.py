@@ -1,6 +1,7 @@
 import logging
 from typing import Optional, List, Dict, Any
 from memex.graph.client import get_graph_client
+from memex.graph.schema import uuid_or_natural_key
 
 logger = logging.getLogger(__name__)
 
@@ -54,20 +55,26 @@ async def get_active_modules(since_days: int, scope: Optional[str], repo: Option
 async def get_recent_decisions_raw(since_days: int, module: Optional[str], limit: int, repo: Optional[str] = None, corroborated_only: bool = False, project: Optional[str] = None) -> List[Dict[str, Any]]:
     """Returns recent decision nodes and their affected modules."""
     client = await get_graph_client()
-    query = """
+    # `d` is matched loosely (`d.type = 'Decision' OR d.name CONTAINS
+    # 'Decision'`), which can in principle catch a Symbol whose name happens
+    # to contain "Decision" (this repo's own codebase has plenty — e.g.
+    # `record_decision`, `DecisionNode`). Symbol nodes never get a `uuid`
+    # (confirmed live), so the `id` field uses uuid_or_natural_key() rather
+    # than a bare `d.uuid`, to avoid a silently-null id for that case.
+    query = ("""
     MATCH (d:Entity)
     WHERE (d.type = 'Decision' OR d.name CONTAINS 'Decision')
       AND (($project IS NULL AND $repo IS NULL) OR ($project IS NOT NULL AND d.project_id = $project) OR ($repo IS NOT NULL AND d.repo_path = $repo))
       AND coalesce(d.created_at, datetime()) >= datetime() - duration({days: $days})
       AND ($corroborated_only = false OR d.corroborated = true OR d.validated = true)
-    
+
     OPTIONAL MATCH (d)-[r:MOTIVATES|RELATES_TO|MENTIONS]-(m:Entity)
     WHERE (r.expired_at IS NULL)
       AND (coalesce(m.type, '') = 'Module' OR m.name ENDS WITH '.py' OR m.name ENDS WITH '.js')
- 
+
     WITH d, collect(DISTINCT m.name) as module_paths
     WHERE ($module IS NULL OR any(path IN module_paths WHERE path STARTS WITH $module))
-    
+
     RETURN
       d.name as text,
       coalesce(d.created_at, datetime()) as date,
@@ -88,10 +95,10 @@ async def get_recent_decisions_raw(since_days: int, module: Optional[str], limit
       d.created_at as created_at,
       d.validated as validated,
       d.corroborated as corroborated,
-      coalesce(d.uuid, elementId(d)) as id
+      """ + uuid_or_natural_key("d") + """ as id
     ORDER BY d.created_at DESC
     LIMIT $limit
-    """
+    """)
     try:
         res = await client.driver.execute_query(query, params={"days": since_days, "module": module, "limit": limit, "repo": repo, "corroborated_only": corroborated_only, "project": project})
         return [r.data() for r in res.records]
@@ -101,8 +108,13 @@ async def get_recent_decisions_raw(since_days: int, module: Optional[str], limit
 async def get_open_problems_raw(module: Optional[str], repo: Optional[str] = None, project: Optional[str] = None) -> List[Dict[str, Any]]:
     """Returns unresolved problem nodes."""
     client = await get_graph_client()
-    # We match anything that looks like a Problem and is NOT resolved
-    query = """
+    # We match anything that looks like a Problem and is NOT resolved.
+    # Same "d.name CONTAINS X" risk as get_recent_decisions_raw above —
+    # `p` here could in principle be a Symbol whose name contains "Problem"
+    # (e.g. a class literally named "ProblemSolver"), and Symbol nodes never
+    # get a `uuid`, so `id` uses uuid_or_natural_key() rather than a bare
+    # `p.uuid`.
+    query = ("""
     MATCH (p:Entity)
     WHERE (p.type = 'Problem' OR p.name CONTAINS 'Problem')
       AND (($project IS NULL AND $repo IS NULL) OR ($project IS NOT NULL AND p.project_id = $project) OR ($repo IS NOT NULL AND p.repo_path = $repo))
@@ -124,13 +136,13 @@ async def get_open_problems_raw(module: Optional[str], repo: Optional[str] = Non
     
     WHERE ($module IS NULL OR m.name STARTS WITH $module)
     
-    RETURN p.name as text, coalesce(p.severity, 'medium') as severity, 
+    RETURN p.name as text, coalesce(p.severity, 'medium') as severity,
            coalesce(m.name, 'unknown') as module, coalesce(p.created_at, datetime()) as date,
            coalesce(p.surfaced_by, 'watcher') as agent,
-           coalesce(p.uuid, elementId(p)) as id
+           """ + uuid_or_natural_key("p") + """ as id
     ORDER BY sev_score DESC, date DESC
     LIMIT 20
-    """
+    """)
     try:
         res = await client.driver.execute_query(query, params={"module": module, "repo": repo, "project": project})
         return [r.data() for r in res.records]
@@ -140,6 +152,20 @@ async def get_open_problems_raw(module: Optional[str], repo: Optional[str] = Non
 async def get_stale_edges(threshold: float, limit: int, repo: Optional[str] = None, project: Optional[str] = None) -> List[Dict[str, Any]]:
     """Returns relationships with low confidence."""
     client = await get_graph_client()
+    # `r` is unfiltered by relationship type, so this can reach a CALLS edge
+    # (memex/graph/writer.py's write_call_edges) exactly as easily as a
+    # graphiti-native RELATES_TO/MENTIONS edge — and CALLS edges have no
+    # `uuid` (or any id) at all, confirmed live: their full property set is
+    # exactly `{created_at, line, last_reinforced_at}`. There is no natural
+    # key to invent for a bare relationship, so `id` is `r.uuid` only — a
+    # matched CALLS edge would return a null id here rather than a fabricated
+    # one. In practice this function looks to be dead already, separately
+    # from the identity-builtin issue: `r.confidence` is never set on ANY relationship anywhere in
+    # this codebase (only Decision *nodes* get `d.confidence`, in
+    # graph/writer.py), so `coalesce(r.confidence, 1.0) < $threshold` can only
+    # ever pass for a threshold > 1.0 — a pre-existing, separate bug, not
+    # something introduced by removing the old parse-breaking identity
+    # builtin this used to fall back on.
     query = """
     MATCH (s:Entity)-[r]->(t:Entity)
     WHERE r.expired_at IS NULL
@@ -148,7 +174,7 @@ async def get_stale_edges(threshold: float, limit: int, repo: Optional[str] = No
     RETURN s.name as source, t.name as target, type(r) as edge_type,
            coalesce(r.confidence, 1.0) as confidence, coalesce(r.valid_from, r.created_at, datetime()) as date,
            coalesce(r.source_commit, 'unknown') as sha,
-           elementId(r) as id
+           r.uuid as id
     ORDER BY confidence ASC
     LIMIT $limit
     """
@@ -161,7 +187,13 @@ async def get_stale_edges(threshold: float, limit: int, repo: Optional[str] = No
 async def get_symbol_by_name(name: str, file: Optional[str], repo: Optional[str] = None, project: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Finds a single symbol by name and optional file."""
     client = await get_graph_client()
-    query = """
+    # `s` here is explicitly a Symbol (or a Symbol-shaped untyped entity) —
+    # Symbol nodes never get a `uuid` (confirmed live), so this one MUST use
+    # uuid_or_natural_key() rather than a bare `s.uuid` swap; a
+    # plain uuid swap would return a null `id` for every real Symbol match,
+    # which is exactly the "silently matches nothing useful" failure mode
+    # to avoid.
+    query = ("""
     MATCH (s:Entity {name: $name})
     WHERE (coalesce(s.type, '') = 'Symbol' OR (s.type IS NULL AND NOT s.name ENDS WITH '.py'))
     AND ($file IS NULL OR coalesce(s.file, '') = $file)
@@ -169,9 +201,9 @@ async def get_symbol_by_name(name: str, file: Optional[str], repo: Optional[str]
     RETURN s.name as name, coalesce(s.kind, 'fn') as kind, coalesce(s.file, 'unknown') as file,
            coalesce(s.line, 0) as line, coalesce(s.signature, 'n/a') as signature,
            coalesce(s.confidence, 1.0) as confidence, coalesce(s.stale, false) as stale,
-           elementId(s) as id
+           """ + uuid_or_natural_key("s") + """ as id
     LIMIT 1
-    """
+    """)
     try:
         res = await client.driver.execute_query(query, params={"name": name, "file": file, "repo": repo, "project": project})
         return res.records[0].data() if res.records else None
@@ -307,9 +339,16 @@ async def increment_access_count(node_ids: List[str]) -> None:
     if not node_ids:
         return
     client = await get_graph_client()
+    # node_ids here are always uuids of graphiti-searchable hits (this is
+    # only ever called with `sr.uuid` values from client.search() results —
+    # see composite_search() below). Symbol/Decision/Cluster nodes are
+    # written via raw Cypher MERGE, bypassing add_episode()'s embedding
+    # pipeline entirely, so they never carry a name_embedding and never
+    # surface from client.search() in the first place — this can only ever
+    # be called with real uuids, so no natural-key fallback is needed here.
     query = """
     MATCH (n:Entity)
-    WHERE n.uuid IN $ids OR elementId(n) IN $ids
+    WHERE n.uuid IN $ids
     SET n.access_count = coalesce(n.access_count, 0) + 1
     """
     try:

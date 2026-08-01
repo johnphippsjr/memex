@@ -343,6 +343,44 @@ class MemexWritePolicyError(Exception):
         )
 
 
+def uuid_or_natural_key(var: str) -> str:
+    """Cypher fragment: ``coalesce(<var>.uuid, <composite natural key>)``.
+
+    FalkorDB has no per-node identity builtin the way Neo4j has
+    ``element`` + ``Id`` (see graph/writer.py's comments for the full
+    history of that discovery) — it doesn't exist as a Cypher builtin here,
+    and FalkorDB rejects any query referencing it at PARSE time (the whole
+    statement fails to compile, not just that clause). Every node
+    graphiti-core persists via ``add_episode()``/``EntityNode.save()`` always
+    carries a real ``uuid`` property, so ``n.uuid`` alone is sufficient for
+    those. But memex's own directly-MERGEd node types — Symbol
+    (``writer.py``'s ``_merge_structured_symbol``), Module and Cluster
+    (``cluster_runner.py``'s ``write_cluster_assignments``) — were never
+    given a ``uuid`` at all (confirmed live against memex-fork-test-rr2:
+    Symbol nodes' property set is exactly
+    ``{name, file, repo_path, type, kind, signature, line, valid_from,
+    source_commit, write_policy, access_count, last_reinforced_at}`` — no
+    uuid). A query generic enough to reach those node types (e.g. any
+    unfiltered ``MATCH (n:Entity)``) needs a real fallback identity, not a
+    second reference to that missing builtin that would just move the same
+    parse failure one property over.
+
+    This composite reuses the exact properties that already serve as each
+    such type's MERGE key elsewhere in the codebase (type/name/repo_path/
+    file/principal_id) — it invents nothing, it just makes that existing
+    natural key available as a single returnable/matchable string. Safe to
+    use even when a query can ONLY ever match uuid-bearing nodes (Decision /
+    Problem / graphiti-extracted Entity) — ``coalesce()`` short-circuits on
+    the first non-null value, so ``.uuid`` wins whenever it's present.
+    """
+    return (
+        f"coalesce({var}.uuid, "
+        f"coalesce({var}.type,'') + '::' + coalesce({var}.name,'') + '::' + "
+        f"coalesce({var}.repo_path,'') + '::' + coalesce({var}.file,'') + '::' + "
+        f"coalesce({var}.principal_id,''))"
+    )
+
+
 def check_write_policy(
     node_type: str,
     principal_id: str,

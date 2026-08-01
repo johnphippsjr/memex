@@ -37,6 +37,7 @@ COLD_AGE_DAYS = 90
 # We import the function here; do NOT re-implement the lambda constants —
 # any drift between the two files becomes a silent correctness bug.
 from memex.graph.confidence import current_confidence as _current_confidence  # noqa: E402
+from memex.graph.schema import uuid_or_natural_key  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -206,53 +207,76 @@ def _store_node(
 # ---------------------------------------------------------------------------
 
 
-_COLD_CANDIDATE_QUERY = """
+# NOTE: none of these four queries filter `n`/`m`/`m2` by node type — the
+# whole point of the archive sweep is to reach any cold, unvalidated
+# :Entity, and that includes Symbol/Module/Cluster nodes, which memex MERGEs
+# directly and never gives a `uuid` (confirmed live: a Symbol node's full
+# property set has no `uuid` key at all). The old Neo4j-only per-node
+# identity builtin this fork used to fall back on (see graph/writer.py's
+# comments for the full history) does NOT degrade gracefully for those on
+# FalkorDB — FalkorDB doesn't implement it, and the whole statement fails
+# to PARSE, not just that clause. uuid_or_natural_key()
+# falls back to the same (type, name, repo_path, file) tuple that already
+# serves as those node types' MERGE key, so archived Symbol/Module/Cluster
+# nodes still get a real, deterministic, round-trippable node_id instead of
+# silently collapsing to a shared `None` (which would corrupt the SQLite
+# archive's node_id primary key and make tombstone/restore re-match the
+# wrong row, or no row).
+_COLD_CANDIDATE_QUERY = (
+    """
 MATCH (n:Entity)
 WHERE coalesce(n.validated, false) = false
 RETURN
-    coalesce(n.uuid, toString(elementId(n))) AS node_id,
+    """ + uuid_or_natural_key("n") + """ AS node_id,
     labels(n) AS labels,
     properties(n) AS props
 """
+)
 
 
-_NODE_EDGES_QUERY = """
+_NODE_EDGES_QUERY = (
+    """
 MATCH (n:Entity)
-WHERE coalesce(n.uuid, toString(elementId(n))) = $node_id
+WHERE """ + uuid_or_natural_key("n") + """ = $node_id
 OPTIONAL MATCH (n)-[r_out]->(m)
 WITH n, collect({
     direction: 'out',
     rel_type: type(r_out),
-    other_id: coalesce(m.uuid, toString(elementId(m))),
+    other_id: """ + uuid_or_natural_key("m") + """,
     properties: properties(r_out)
 }) AS out_edges
 OPTIONAL MATCH (n)<-[r_in]-(m2)
 RETURN out_edges + collect({
     direction: 'in',
     rel_type: type(r_in),
-    other_id: coalesce(m2.uuid, toString(elementId(m2))),
+    other_id: """ + uuid_or_natural_key("m2") + """,
     properties: properties(r_in)
 }) AS edges
 """
+)
 
 
-_TOMBSTONE_QUERY = """
+_TOMBSTONE_QUERY = (
+    """
 MATCH (n:Entity)
-WHERE coalesce(n.uuid, toString(elementId(n))) = $node_id
+WHERE """ + uuid_or_natural_key("n") + """ = $node_id
 SET n:Tombstoned,
     n.archived_at = $now,
     n.archive_db_path = $db_path
 """
+)
 
 
-_RESTORE_FETCH_QUERY = """
+_RESTORE_FETCH_QUERY = (
+    """
 MATCH (n:Tombstoned)
-WHERE coalesce(n.uuid, toString(elementId(n))) = $node_id
+WHERE """ + uuid_or_natural_key("n") + """ = $node_id
 REMOVE n:Tombstoned
 REMOVE n.archived_at
 REMOVE n.archive_db_path
-RETURN coalesce(n.uuid, toString(elementId(n))) AS node_id
+RETURN """ + uuid_or_natural_key("n") + """ AS node_id
 """
+)
 
 
 async def _query(client: Any, cypher: str, params: dict[str, Any] | None = None) -> Any:

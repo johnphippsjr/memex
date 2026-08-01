@@ -23,6 +23,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Awaitable, Optional
 
+from memex.graph.schema import uuid_or_natural_key
 from memex.memory_tool import serializer
 
 logger = logging.getLogger(__name__)
@@ -170,12 +171,16 @@ class GraphProjection:
         if type_label is None:
             return []
 
+        # `type_label` can be 'Cluster' or 'Module' here (see the dict two
+        # lines up) — cluster_runner.py never gives either a `uuid` (only
+        # Decision's direct MERGE self-assigns one). uuid_or_natural_key()
+        # avoids silently returning a null `id` for those.
         cypher = (
             "MATCH (n:Entity) "
             "WHERE n.type = $type "
             "  AND (n.expired_at IS NULL OR n.expired_at > $snapshot) "
             "RETURN coalesce(n.text, n.name, n.path) AS title, "
-            "       coalesce(n.uuid, elementId(n)) AS id, "
+            "       " + uuid_or_natural_key("n") + " AS id, "
             "       n.repo_path AS repo_path "
             "ORDER BY n.created_at DESC "
             "LIMIT 200"
@@ -273,11 +278,12 @@ class GraphProjection:
     async def _find_node_by_slug(
         self, type_label: str, repo_slug: str, target_slug: str
     ) -> Optional[dict[str, Any]]:
+        # Same Cluster/Module reasoning as _list_category above.
         cypher = (
             "MATCH (n:Entity) "
             "WHERE n.type = $type "
             "  AND (n.expired_at IS NULL OR n.expired_at > $snapshot) "
-            "RETURN n{.*, id: coalesce(n.uuid, elementId(n)), title: coalesce(n.text, n.name, n.path), repo_path: n.repo_path} AS node "
+            "RETURN n{.*, id: " + uuid_or_natural_key("n") + ", title: coalesce(n.text, n.name, n.path), repo_path: n.repo_path} AS node "
             "LIMIT 500"
         )
         rows = await self._run(
