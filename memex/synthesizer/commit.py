@@ -3,7 +3,7 @@ import logging
 import asyncio
 from typing import List
 from pydantic import BaseModel
-from google import genai
+import openai
 from memex.config import get_config
 from memex.graph.schema import Decision
 
@@ -23,8 +23,9 @@ async def extract_decisions(
     commit_sha: str,
 ) -> List[Decision]:
     """
-    Uses Gemini Flash to extract zero or more architectural decisions from a commit.
-    Includes rate limit retries and trivial commit filtering.
+    Uses the configured LiteLLM gateway model to extract zero or more
+    architectural decisions from a commit. Includes rate limit retries and
+    trivial commit filtering.
     """
     # Guard against empty/whitespace messages
     if not commit_message or not commit_message.strip():
@@ -38,40 +39,42 @@ async def extract_decisions(
         return []
 
     config = get_config()
-    client = genai.Client(api_key=config.gemini_api_key)
-    
+    client = openai.AsyncOpenAI(base_url=config.litellm_base_url, api_key=config.litellm_api_key)
+
     prompt = f"""
-    Analyze the following git commit message and diff summary. 
+    Analyze the following git commit message and diff summary.
     Extract zero or more architectural or technical decisions made in this commit.
     A decision is a deliberate choice about how the system is built, not just a bug fix or a description of code changes.
-    
+
     Commit Message: {commit_message}
     Diff Summary: {diff_summary}
-    
+
     If the commit is trivial (e.g., typos, formatting, WIP, merging), return an empty list.
-    
+
     Return the decisions in a strict JSON format matching the schema.
     """
 
     # Retry logic with exponential backoff
     for attempt in range(3):
         try:
-            # google-genai's generate_content is synchronous. Wrap it in
-            # asyncio.to_thread so the watcher event loop isn't blocked for
-            # the full LLM round-trip (typically 1-5s on Gemini Flash).
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=config.gemini_model,
-                contents=prompt,
-                config={
-                    'response_mime_type': 'application/json',
-                    'response_schema': DecisionsResponse,
+            # openai.AsyncOpenAI's chat.completions.create is natively async
+            # (no asyncio.to_thread needed — that was only required for the
+            # synchronous google-genai SDK this replaces).
+            response = await client.chat.completions.create(
+                model=config.litellm_model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "decisions",
+                        "schema": DecisionsResponse.model_json_schema(),
+                    },
                 },
             )
-            
-            data = json.loads(response.text)
+
+            data = json.loads(response.choices[0].message.content)
             extracted_decisions = []
-            
+
             for d in data.get("decisions", []):
                 # v0.3.0 defaults (Phase 8 — Hallucination Mitigation):
                 #   validated=False  — watcher-synthesised, must be approved via `memex review`
@@ -92,7 +95,7 @@ async def extract_decisions(
                     validated=False,
                     base_confidence=config.initial_confidence_for(None),
                 ))
-                
+
             return extracted_decisions
 
         except Exception as e:
@@ -100,11 +103,11 @@ async def extract_decisions(
             err_str = str(e).lower()
             if "429" in err_str or "rate limit" in err_str:
                 wait_time = (2 ** attempt) + 1
-                logger.warning("Gemini rate limit hit. Retrying in %ds...", wait_time)
+                logger.warning("LiteLLM gateway rate limit hit. Retrying in %ds...", wait_time)
                 await asyncio.sleep(wait_time)
                 continue
-            
-            logger.error("Failed to extract decisions via Gemini", exc_info=True)
+
+            logger.error("Failed to extract decisions via LiteLLM gateway", exc_info=True)
             return []
 
     logger.error("Failed to extract decisions after 3 attempts due to rate limits.")

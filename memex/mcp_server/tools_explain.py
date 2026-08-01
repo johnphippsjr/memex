@@ -1,10 +1,12 @@
 """Phase 9 — `explain_change` MCP tool (tool 11).
 
 Cross-references a commit's diff with Decision/Problem nodes linked to the
-affected files, then asks Gemini Pro to synthesise a grounded explanation.
+affected files, then asks the configured LiteLLM gateway "pro" model
+(``config.pro_model``) to synthesise a grounded explanation.
 
 Per ARCHITECTURE-v0.3.0.md §6: this is a synthesis task, not extraction —
-Pro, not Flash. Output capped at ~2000 tokens via the formatter's char budget.
+a dedicated grounded-synthesis model, not the cheaper extraction model used
+elsewhere. Output capped at ~2000 tokens via the formatter's char budget.
 """
 
 import asyncio
@@ -12,6 +14,7 @@ import logging
 import re
 from typing import List, Dict, Any, Optional
 
+import openai
 from memex.config import get_config
 from memex.graph.client import get_graph_client
 
@@ -127,7 +130,7 @@ async def _query_linked_decisions_and_problems(
 
 
 def _build_prompt(commit_sha: str, diff_text: str, context_nodes: List[Dict[str, Any]]) -> str:
-    """Compose a grounded synthesis prompt for Gemini Pro."""
+    """Compose a grounded synthesis prompt for the configured pro model."""
     # Trim diff so the prompt itself fits comfortably
     diff_excerpt = diff_text if len(diff_text) <= 15000 else diff_text[:15000] + "\n[diff truncated]"
 
@@ -162,34 +165,34 @@ def _build_prompt(commit_sha: str, diff_text: str, context_nodes: List[Dict[str,
 
 
 async def _call_gemini_pro(prompt: str) -> str:
-    """Synchronous Gemini Pro call wrapped in asyncio.to_thread.
+    """Grounded-synthesis call to the configured LiteLLM gateway "pro" model.
 
-    Mirrors the 3-attempt exponential backoff in
+    Named ``_call_gemini_pro`` for historical continuity with
+    ARCHITECTURE-v0.3.0.md §6 and the test suite; it no longer calls Gemini —
+    it calls ``config.pro_model`` via the OpenAI-compatible gateway client,
+    mirroring the 3-attempt exponential backoff in
     ``memex/synthesizer/commit.py`` so transient 429 / rate-limit responses
     don't immediately surface as user-facing failures.
     """
-    from google import genai
-
     config = get_config()
-    model_id = getattr(config, "pro_model", "gemini-2.5-pro")
-    client = genai.Client(api_key=config.gemini_api_key)
+    model_id = getattr(config, "pro_model", config.litellm_model)
+    client = openai.AsyncOpenAI(base_url=config.litellm_base_url, api_key=config.litellm_api_key)
 
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            response = await asyncio.to_thread(
-                client.models.generate_content,
+            response = await client.chat.completions.create(
                 model=model_id,
-                contents=prompt,
+                messages=[{"role": "user", "content": prompt}],
             )
-            return getattr(response, "text", "") or ""
+            return response.choices[0].message.content or ""
         except Exception as e:
             err_str = str(e).lower()
             last_exc = e
             if attempt < 2 and ("429" in err_str or "rate limit" in err_str):
                 wait_time = (2 ** attempt) + 1
                 logger.warning(
-                    "Gemini Pro rate limit on explain_change; retry in %ds",
+                    "Gateway rate limit on explain_change; retry in %ds",
                     wait_time,
                 )
                 await asyncio.sleep(wait_time)
@@ -203,7 +206,8 @@ async def _call_gemini_pro(prompt: str) -> str:
 
 async def explain_change(commit_sha: str, repo: Optional[str] = None) -> str:
     """Cross-references a commit's diff with Decision/Problem nodes linked
-    to the affected files and returns a Gemini-Pro-synthesised explanation.
+    to the affected files and returns a gateway-pro-model-synthesised
+    explanation.
 
     Returns a Markdown string under ~2000 tokens. Never raises into the MCP
     protocol — all failure modes degrade to a graceful string.
@@ -244,12 +248,12 @@ async def explain_change(commit_sha: str, repo: Optional[str] = None) -> str:
         if not synthesis.strip():
             result = _truncate(
                 f"# explain_change\n\ncommit: {commit_sha}\n"
-                f"synthesis returned empty response — check Gemini Pro availability"
+                f"synthesis returned empty response — check gateway pro-model availability"
             )
         else:
             result = _truncate(synthesis)
     except Exception as e:
-        logger.error("Gemini Pro call failed in explain_change", exc_info=True)
+        logger.error("Gateway pro-model call failed in explain_change", exc_info=True)
         # Graceful fallback: surface the raw context so the agent still gets value
         ctx_text = "\n".join(
             f"- [{n.get('node_type','Node')}] {n.get('text','')}" for n in context_nodes

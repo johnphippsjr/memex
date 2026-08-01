@@ -565,7 +565,7 @@ async def run_server(repo_root: str, transport: str = "stdio", host: str = "127.
         server = await create_server(repo_root)
         
         config = get_config()
-        logger.info("memex MCP server %s ready — repo: %s, neo4j: %s", __version__, config.repo_root, config.neo4j_uri)
+        logger.info("memex MCP server %s ready — repo: %s, falkordb: %s:%s/%s", __version__, config.repo_root, config.falkor_host, config.falkor_port, config.falkor_graph)
 
         tasks = []
         

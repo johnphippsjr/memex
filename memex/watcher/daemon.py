@@ -73,14 +73,14 @@ async def run_daemon(repo_root: str | None = None) -> None:
         logger.info("  Mode: Single Repo (%s)", repo_root_path)
     else:
         logger.info("  Mode: Multi-Repo (Registry)")
-    logger.info("  Neo4j URI: %s", config.neo4j_uri)
-    logger.info("  Gemini Model: %s", config.gemini_model)
+    logger.info("  FalkorDB: %s:%s/%s", config.falkor_host, config.falkor_port, config.falkor_graph)
+    logger.info("  LiteLLM Model: %s", config.litellm_model)
 
     try:
         client = await get_graph_client()
         # Verify connectivity
         await client.driver.execute_query("RETURN 1")
-        logger.info("Connected to Neo4j successfully")
+        logger.info("Connected to FalkorDB successfully")
     except Exception:
         logger.error("Failed to connect to Neo4j. Ensure Neo4j is running and credentials are correct.", exc_info=True)
         print("CRITICAL: Could not connect to Neo4j backend.")

@@ -1,4 +1,4 @@
-"""Cluster-level summary synthesis using Gemini Flash.
+"""Cluster-level summary synthesis using the configured LiteLLM gateway model.
 
 Generates a concise one-line summary for each cluster based on
 its member modules and their associated decisions.
@@ -6,33 +6,24 @@ its member modules and their associated decisions.
 
 from __future__ import annotations
 import logging
-import asyncio
 from typing import Optional, Any
+
+import openai
+from memex.config import get_config
 
 logger = logging.getLogger(__name__)
 
 
 async def _embed_text(text: str) -> list[float]:
-    """Embed ``text`` via the configured Gemini embedding model.
+    """Embed ``text`` via the configured gateway embedding model (bge-m3).
     Retained for backward compatibility with watcher handlers and test files.
     """
     try:
-        from google import genai
-        from memex.config import get_config
-
         cfg = get_config()
-        client = genai.Client(api_key=cfg.gemini_api_key)
-        model = getattr(cfg, "gemini_embedding_model", "models/text-embedding-004")
-        resp = await asyncio.to_thread(
-            client.models.embed_content, model=model, contents=text
-        )
-        emb = getattr(resp, "embedding", None) or getattr(resp, "embeddings", None)
-        if hasattr(emb, "values"):
-            return list(emb.values)
-        if isinstance(emb, list) and emb and hasattr(emb[0], "values"):
-            return list(emb[0].values)
-        if isinstance(emb, list):
-            return list(emb)
+        client = openai.AsyncOpenAI(base_url=cfg.litellm_base_url, api_key=cfg.litellm_api_key)
+        resp = await client.embeddings.create(input=text, model=cfg.embedding_model)
+        if resp.data:
+            return list(resp.data[0].embedding[: cfg.embedding_dim])
         return []
     except Exception:
         logger.debug("summary: embedding failed for %r", text[:60], exc_info=True)
@@ -48,8 +39,8 @@ async def synthesize_cluster_summary(
 ) -> str:
     """Generate a one-line summary of a cluster's purpose.
 
-    Uses Gemini Flash to synthesize member modules and their decisions
-    into a single descriptive sentence.
+    Uses the configured LiteLLM gateway model to synthesize member modules
+    and their decisions into a single descriptive sentence.
 
     Args:
         cluster_name: TF-IDF-derived cluster name
@@ -61,13 +52,10 @@ async def synthesize_cluster_summary(
         A single sentence summarizing the cluster's architectural role.
     """
     try:
-        from google import genai
-        from memex.config import get_config
-
         cfg = get_config()
-        client = genai.Client(api_key=cfg.gemini_api_key)
+        client = openai.AsyncOpenAI(base_url=cfg.litellm_base_url, api_key=cfg.litellm_api_key)
     except Exception as e:
-        logger.warning("Failed to initialize Gemini client: %s", e)
+        logger.warning("Failed to initialize LiteLLM gateway client: %s", e)
         return f"Cluster containing modules: {', '.join(member_modules[:3])}"
 
     truncated = decision_texts[:max_decisions]
@@ -82,12 +70,11 @@ async def synthesize_cluster_summary(
     )
 
     try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model="gemini-2.5-flash",
-            contents=prompt,
+        response = await client.chat.completions.create(
+            model=cfg.litellm_model,
+            messages=[{"role": "user", "content": prompt}],
         )
-        return (response.text or "").strip()
+        return (response.choices[0].message.content or "").strip()
     except Exception as e:
         logger.warning("Failed to generate cluster summary for %s: %s", cluster_name, e)
         return f"Cluster containing modules: {', '.join(member_modules[:3])}"

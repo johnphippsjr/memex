@@ -158,29 +158,29 @@ async def run_doctor(repo_root: str):
         print("[FAIL] Docker                  not found or not running. Please install/start Docker.")
         all_pass = False
 
-    # 4. Neo4j connectivity
+    # 4. FalkorDB connectivity
     start_time = time.time()
     try:
         client = await get_graph_client()
         await client.driver.execute_query("RETURN 1")
         elapsed = int((time.time() - start_time) * 1000)
-        print(f"[PASS] Neo4j reachable         bolt://localhost:7687 responded in {elapsed}ms")
+        print(f"[PASS] FalkorDB reachable      responded in {elapsed}ms")
     except Exception:
-        print("[FAIL] Neo4j reachable         Could not connect. Ensure 'docker-compose up -d' is running.")
+        print("[FAIL] FalkorDB reachable      Could not connect. Ensure 'docker-compose up -d' is running.")
         all_pass = False
 
-    # 5. Gemini API key
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if gemini_key:
+    # 5. LiteLLM gateway key
+    litellm_key = os.getenv("LITELLM_API_KEY")
+    if litellm_key:
         try:
             # The import IS the check — fails if the SDK isn't installed.
-            from google import genai  # noqa: F401
-            print("[PASS] Gemini API key          GEMINI_API_KEY set")
+            import openai  # noqa: F401
+            print("[PASS] LiteLLM gateway key     LITELLM_API_KEY set")
         except Exception:
-            print("[FAIL] Gemini API key          GEMINI_API_KEY set but SDK missing")
+            print("[FAIL] LiteLLM gateway key     LITELLM_API_KEY set but openai SDK missing")
             all_pass = False
     else:
-        print("[FAIL] Gemini API key          GEMINI_API_KEY environment variable not set")
+        print("[FAIL] LiteLLM gateway key     LITELLM_API_KEY environment variable not set")
         all_pass = False
 
     # 6. Git hooks
