@@ -17,6 +17,48 @@ class NoOpCrossEncoder(CrossEncoderClient):
     async def rank(self, query: str, documents: List[str]) -> List[float]:
         return [0.5] * len(documents)
 
+
+class CompatFalkorDriver(FalkorDriver):
+    """
+    Restores the Neo4jDriver `execute_query(cypher, params={...})` calling
+    convention on top of graphiti-core 0.29.3's FalkorDriver.
+
+    Every one of memex's own structured (non-NL) Cypher writes/reads —
+    graph/writer.py's Symbol MERGE + CALLS edges, watcher/handlers.py's
+    decision corroboration, cli_review.py, the cluster/archive/decay/
+    governance passes, and the whole mcp_server query/write-tool layer —
+    was written against `graphiti_core.driver.neo4j_driver.Neo4jDriver
+    .execute_query`, which special-cases a `params` kwarg:
+    `params = kwargs.pop('params', None)`. FalkorDriver.execute_query does
+    NOT: its signature is `execute_query(self, cypher_query_, **kwargs)` and
+    it treats the whole of `**kwargs` as the flat parameter dict. A caller
+    passing `params={"name": ...}` therefore sends FalkorDB a single
+    top-level parameter literally named "params" — none of the query's real
+    `$name`/`$file`/... placeholders are ever bound, and FalkorDB rejects the
+    call with `ResponseError: Missing parameters`, on every single one of
+    these ~60 call sites, every time.
+
+    `client.add_episode()` itself is unaffected (graphiti-core's own internal
+    driver calls already match each driver's real signature) — which is why
+    the earlier OpenAIGenericClient fix alone produced real Episodic/Entity
+    nodes but every structured Symbol/CALLS/decision write downstream of it
+    kept silently failing. Verified live 2026-08-01: a bare
+    `FalkorDriver.execute_query(q, params={"now": ...})` fails with the exact
+    "Missing parameters" error surfaced during the fork's real-ingestion
+    retest; the same call through this subclass succeeds.
+
+    Restoring the same normalization Neo4jDriver already does here keeps
+    every existing memex call site (and the unit tests asserting that exact
+    `params=` calling convention) working unmodified.
+    """
+
+    async def execute_query(self, cypher_query_, **kwargs):
+        params = kwargs.pop("params", None)
+        if params:
+            kwargs.update(params)
+        return await super().execute_query(cypher_query_, **kwargs)
+
+
 class GraphClient:
     """
     Singleton Graphiti client for memex.
@@ -34,7 +76,7 @@ class GraphClient:
             # group_id equals the driver's already-configured database and
             # graphiti-core never triggers its silent
             # `self.driver.clone(database=group_id)` re-point.
-            falkor_driver = FalkorDriver(
+            falkor_driver = CompatFalkorDriver(
                 host=config.falkor_host,
                 port=config.falkor_port,
                 database=config.falkor_graph,
