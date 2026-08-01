@@ -1,4 +1,5 @@
 import logging
+import uuid as uuid_module
 from datetime import datetime, UTC
 from pydantic import ValidationError
 from memex.config import get_config
@@ -238,30 +239,30 @@ async def write_call_edges(calls, repo_root: str | None = None) -> int:
     return written
 
 
-async def _get_episode_uuid(client, episode_name: str, episode_uuid: str | None) -> str | None:
-    """
-    Returns episode_uuid if already known.
-    If None, attempts a fallback Cypher lookup by episode name:
-        MATCH (n:Entity) WHERE n.name = $name RETURN n.uuid as uuid LIMIT 1
-
-    Neo4j's ``elementId(n)`` is NOT implemented by FalkorDB — a query using it
-    fails to PARSE at all (not merely "function not found" for that clause),
-    so the whole MATCH/RETURN would error out. Every node graphiti-core
-    persists (via ``add_episode`` / ``EntityNode.save`` /
-    ``EpisodicNode.save``) always carries a real ``uuid`` property, so
-    ``coalesce(n.uuid, elementId(n))``'s Neo4j-only fallback branch is both
-    unsupported here and unnecessary.
-    """
-    if episode_uuid is not None:
-        return episode_uuid
-    query = "MATCH (n:Entity) WHERE n.name = $name RETURN n.uuid as uuid LIMIT 1"
-    try:
-        res = await client.driver.execute_query(query, params={"name": episode_name})
-        if res.records:
-            return res.records[0]["uuid"]
-    except Exception:
-        pass
-    return None
+#: Structured Decision node — created directly with a self-generated uuid,
+#: mirroring _SYMBOL_MERGE_QUERY's pattern for Symbols. See write_decision's
+#: comment for why this replaced a post-hoc SET keyed off add_episode()'s
+#: episode.uuid (that uuid belongs to the :Episodic node, never to an
+#: :Entity, so it could never match `MATCH (d:Entity)` — the label every
+#: decision-reading query in mcp_server/queries.py and tools_write.py
+#: requires).
+_DECISION_MERGE_QUERY = """
+MERGE (d:Entity {uuid: $uuid})
+  ON CREATE SET d.type = 'Decision',
+                d.name = $name,
+                d.text = $text,
+                d.rationale = $rationale,
+                d.scope = $scope,
+                d.created_at = $now,
+                d.last_reinforced_at = $now,
+                d.source = $source,
+                d.source_commit = $source_commit,
+                d.confidence = $confidence,
+                d.validated = $validated,
+                d.base_confidence = $base_confidence,
+                d.write_policy = 'open',
+                d.access_count = 0
+"""
 
 
 async def write_decision(decision, modules: list[str], commit_sha: str, confidence: float = 1.0, source: str = "watcher") -> None:
@@ -313,67 +314,81 @@ async def write_decision(decision, modules: list[str], commit_sha: str, confiden
         raise MemexSchemaError("DecisionNode", e.errors())
 
     episode_name = f"decision_{commit_sha[:8]}"
-    result = await client.add_episode(
-        name=episode_name,
-        episode_body=(
-            f"Decision: {decision.text}. Rationale: {decision.rationale}. "
-            f"Scope: {decision.scope}. Affected modules: {', '.join(modules)} "
-            f"(Confidence: {confidence}, Source: {decision_source}, "
-            f"Validated: {validated}, BaseConfidence: {base_confidence})"
-        ),
-        source_description=f"git commit {commit_sha}",
-        reference_time=now,
-        group_id=config.unified_group_id,
-    )
 
-    # Post-hoc Cypher SET for programmatic flags Graphiti doesn't parse from
-    # NL (ARCHITECTURE-v0.3.0 §4, Q1). Without this the v0.3.0 fields are
-    # validated by Pydantic but never reach Neo4j as queryable properties, so
-    # `memex review` ordering, count_unvalidated_decisions, and TempValid
-    # computed-confidence all silently fall back to defaults.
-    episode_uuid = getattr(getattr(result, "episode", None), "uuid", None)
-    episode_uuid = await _get_episode_uuid(client, episode_name, episode_uuid)
-    if episode_uuid is None:
-        raise MemexWriteError(
-            f"write_decision: episode '{episode_name}' not found after add_episode "
-            f"and fallback query. Graphiti may be in an inconsistent state."
+    # NL episode — best-effort search surface for Graphiti's own
+    # search()/embeddings. Failure here does not block the structured write
+    # below (mirrors write_symbol_delta's "structured node first, NL episode
+    # best-effort" ordering).
+    try:
+        await client.add_episode(
+            name=episode_name,
+            episode_body=(
+                f"Decision: {decision.text}. Rationale: {decision.rationale}. "
+                f"Scope: {decision.scope}. Affected modules: {', '.join(modules)} "
+                f"(Confidence: {confidence}, Source: {decision_source}, "
+                f"Validated: {validated}, BaseConfidence: {base_confidence})"
+            ),
+            source_description=f"git commit {commit_sha}",
+            reference_time=now,
+            group_id=config.unified_group_id,
         )
-    else:
-        # FalkorDB-supported identity match: graphiti-core always sets a real
-        # `uuid` property on every node it persists, so matching on that
-        # alone (instead of Neo4j-only `elementId(n)`, which FalkorDB's
-        # Cypher parser rejects outright — the whole query fails to parse,
-        # not just that clause) is both sufficient and portable.
-        set_query = """
-        MATCH (n:Entity)
-        WHERE n.uuid = $uuid
-        SET n.validated = $validated,
-            n.base_confidence = $base_confidence,
-            n.last_reinforced_at = $now,
-            n.source = $source,
-            n.source_commit = $commit_sha,
-            n.write_policy = 'open',
-            n.access_count = coalesce(n.access_count, 0)
-        """
-        try:
-            await client.driver.execute_query(
-                set_query,
-                params={
-                    "uuid": episode_uuid,
-                    "validated": validated,
-                    "base_confidence": base_confidence,
-                    "now": now,
-                    "source": decision_source,
-                    "commit_sha": commit_sha,
-                },
-            )
-        except Exception:
-            logger.warning(
-                "post-hoc property SET failed for decision %s; v0.3.0 fields "
-                "may be missing on the node and require backfill",
-                episode_name,
-                exc_info=True,
-            )
+    except Exception:
+        logger.warning(
+            "write_decision: add_episode failed for %s; NL search surface "
+            "skipped, structured Decision node is still written below",
+            episode_name,
+            exc_info=True,
+        )
+
+    # Deterministic, LLM-free structured node — mirrors
+    # _merge_structured_symbol's pattern for Symbols.
+    #
+    # ROOT CAUSE (found live, NOT just the elementId() parse failure): the
+    # previous code retroactively SET these fields onto whatever node shared
+    # `result.episode.uuid` — but `add_episode()`'s returned `episode` is the
+    # :Episodic node it just created, and Entity nodes (what
+    # `MATCH (n:Entity) WHERE n.uuid = $uuid` requires) are graphiti's own
+    # NL-extracted concepts — a *different* node with a *different* uuid.
+    # That WHERE clause can never match a row, on Neo4j or FalkorDB alike,
+    # elementId() or not: dropping elementId() alone (the original FIX 2)
+    # only fixed the PARSE error and left the SET silently matching zero
+    # rows (verified live: no "post-hoc SET failed" warning logged, yet 0
+    # nodes end up with type='Decision' after a real 10-commit ingest).
+    # Every memex query that reads decisions (mcp_server/queries.py's
+    # get_recent_decisions_raw/get_symbol_decisions/
+    # count_unvalidated_decisions, mcp_server/tools_write.py's
+    # supersede/corroborate paths) requires `MATCH (d:Entity) WHERE
+    # d.type = 'Decision' OR d.name CONTAINS 'Decision'` — so a genuinely
+    # separate :Entity node, created directly with a uuid we control (never
+    # ambiguous, never requires a second lookup), is the only shape that
+    # actually satisfies them. Best-effort: a failure here is logged, not
+    # raised, matching every other structured-write call site in this file.
+    decision_uuid = str(uuid_module.uuid4())
+    try:
+        await client.driver.execute_query(
+            _DECISION_MERGE_QUERY,
+            params={
+                "uuid": decision_uuid,
+                "name": episode_name,
+                "text": decision.text,
+                "rationale": decision.rationale,
+                "scope": decision.scope,
+                "now": now,
+                "source": decision_source,
+                "source_commit": commit_sha,
+                "confidence": confidence,
+                "validated": validated,
+                "base_confidence": base_confidence,
+            },
+        )
+    except Exception:
+        logger.warning(
+            "structured Decision MERGE failed for %s; the decision's NL "
+            "episode is still written but type='Decision' metadata is "
+            "missing until backfilled",
+            episode_name,
+            exc_info=True,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ import pytest
 import os
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, UTC
-from memex.graph.writer import write_decision, MemexWriteError
+from memex.graph.writer import write_decision
 from memex.mcp_server.tools_write import record_decision
 from memex.watcher.handlers import corroborate_decisions
 from memex.mcp_server.queries import get_recent_decisions_raw
@@ -26,10 +26,15 @@ def mock_client():
         yield client
 
 @pytest.mark.asyncio
-async def test_uuid_fallback_success(mock_client):
+async def test_structured_decision_merge_independent_of_episode_uuid(mock_client):
     """
-    If add_episode returns uuid=None, fallback Cypher lookup is triggered.
-    If the fallback lookup succeeds, the post-hoc SET is executed.
+    write_decision's structured Entity MERGE uses a self-generated uuid, not
+    add_episode()'s episode.uuid -- that uuid names the :Episodic episode
+    node, a different node from the :Entity every decision-reading query
+    requires (MATCH (d:Entity) WHERE d.type='Decision'), so it could never
+    safely be reused as the structured node's identity. Even when
+    add_episode() returns uuid=None, the structured write still succeeds
+    with exactly one Cypher call (no more fallback name-lookup query).
     """
     decision = MagicMock()
     decision.text = "Switch auth to JWT"
@@ -38,43 +43,34 @@ async def test_uuid_fallback_success(mock_client):
     decision.validated = False
     decision.base_confidence = 0.6
     decision.source = "watcher"
-    
-    # 1. Mock add_episode returning None for uuid
+
     episode_resp = MagicMock()
     episode_resp.episode = MagicMock()
     episode_resp.episode.uuid = None
     mock_client.add_episode.return_value = episode_resp
-
-    # 2. Mock fallback Cypher query finding the node
-    record = MagicMock()
-    record.__getitem__.side_effect = lambda k: "fallback-uuid-123" if k == "uuid" else None
-    mock_res = MagicMock()
-    mock_res.records = [record]
-    mock_client.driver.execute_query.return_value = mock_res
+    mock_client.driver.execute_query.return_value = MagicMock(records=[])
 
     await write_decision(decision, ["auth.py"], "commit-sha-123")
 
-    # Verify add_episode was called
     mock_client.add_episode.assert_called_once()
-    # Verify two Cypher queries: 1. fallback lookup, 2. post-hoc SET
-    assert mock_client.driver.execute_query.call_count == 2
-    
-    # Check that fallback lookup occurred
-    call_args_fallback = mock_client.driver.execute_query.call_args_list[0]
-    assert "MATCH (n:Entity) WHERE n.name = $name" in call_args_fallback[0][0]
-    assert call_args_fallback[1]["params"]["name"] == "decision_commit-s"
+    # Exactly ONE Cypher call now -- the structured Entity MERGE. No
+    # fallback name-lookup query is needed since the uuid is self-generated.
+    assert mock_client.driver.execute_query.call_count == 1
 
-    # Check that post-hoc SET occurred with fallback UUID
-    call_args_set = mock_client.driver.execute_query.call_args_list[1]
-    assert "MATCH (n:Entity)" in call_args_set[0][0]
-    assert "SET n.validated =" in call_args_set[0][0]
-    assert call_args_set[1]["params"]["uuid"] == "fallback-uuid-123"
+    call_args_merge = mock_client.driver.execute_query.call_args_list[0]
+    assert "MERGE (d:Entity {uuid: $uuid})" in call_args_merge[0][0]
+    assert "d.type = 'Decision'" in call_args_merge[0][0]
+    assert call_args_merge[1]["params"]["uuid"]  # real uuid, never None
 
 @pytest.mark.asyncio
-async def test_uuid_fallback_failure_raises_error(mock_client):
+async def test_structured_decision_merge_failure_does_not_raise(mock_client):
     """
-    If add_episode returns uuid=None, and fallback Cypher lookup also returns None,
-    MemexWriteError is raised.
+    If the structured Decision MERGE fails (FalkorDB down, bad Cypher),
+    write_decision does not raise -- the NL episode is already written and
+    type='Decision' metadata can be backfilled later. This replaces the old
+    "MemexWriteError when uuid missing" contract: that failure mode no
+    longer exists because the structured node's identity is self-generated,
+    never dependent on a lookup that could fail.
     """
     decision = MagicMock()
     decision.text = "Switch auth to JWT"
@@ -83,22 +79,16 @@ async def test_uuid_fallback_failure_raises_error(mock_client):
     decision.validated = False
     decision.base_confidence = 0.6
     decision.source = "watcher"
-    
-    # Mock add_episode returning None for uuid
+
     episode_resp = MagicMock()
     episode_resp.episode = MagicMock()
     episode_resp.episode.uuid = None
     mock_client.add_episode.return_value = episode_resp
+    mock_client.driver.execute_query.side_effect = Exception("FalkorDB unavailable")
 
-    # Mock fallback Cypher query returning no records
-    mock_res = MagicMock()
-    mock_res.records = []
-    mock_client.driver.execute_query.return_value = mock_res
-
-    with pytest.raises(MemexWriteError) as exc_info:
-        await write_decision(decision, ["auth.py"], "commit-sha-123")
-
-    assert "write_decision: episode 'decision_commit-s' not found" in str(exc_info.value)
+    # Must not raise.
+    await write_decision(decision, ["auth.py"], "commit-sha-123")
+    mock_client.add_episode.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_supersedes_nonexistent_node_returns_error(mock_client):

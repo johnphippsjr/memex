@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from memex.graph.writer import (
-    write_symbol_delta, write_decision, write_call_edges, MemexSchemaError, MemexWriteError,
+    write_symbol_delta, write_decision, write_call_edges, MemexSchemaError,
 )
 from memex.extractor.treesitter import SymbolDelta, Symbol as ExtractedSymbol, CallEdge
 
@@ -177,12 +177,19 @@ def test_memex_schema_error_init():
 
 
 @pytest.mark.asyncio
-async def test_write_decision_persists_v030_fields_via_post_hoc_cypher(mock_client):
+async def test_write_decision_persists_v030_fields_via_structured_entity_merge(mock_client):
     """v0.3.0 fields (validated, base_confidence, last_reinforced_at, source,
-    write_policy) must reach Neo4j as queryable properties — not only the NL
-    episode_body. ARCHITECTURE-v0.3.0 §4 Q1. This is the test that would have
-    caught B2."""
-    # Return a result with an episode.uuid the post-hoc SET can target.
+    write_policy) must reach the graph as queryable properties on a real
+    :Entity node — not only the NL episode_body, and not via a post-hoc SET
+    keyed off add_episode()'s episode.uuid (that uuid belongs to the
+    :Episodic node, a different node from the :Entity every decision-reading
+    query requires — verified live against FalkorDB: that SET always matched
+    zero rows, elementId() or not). write_decision now MERGEs a dedicated
+    :Entity node with a self-generated uuid, mirroring
+    _merge_structured_symbol's pattern for Symbols."""
+    # episode.uuid is deliberately DIFFERENT from anything write_decision
+    # should use for the structured node, to prove the two identities are
+    # no longer conflated.
     mock_episode = MagicMock(uuid="episode-uuid-abc")
     mock_result = MagicMock(episode=mock_episode)
     mock_client.add_episode.return_value = mock_result
@@ -197,49 +204,55 @@ async def test_write_decision_persists_v030_fields_via_post_hoc_cypher(mock_clie
 
     await write_decision(decision, modules=["auth.py"], commit_sha="deadbeef")
 
-    # The episode was written AND a post-hoc Cypher SET fired with all the
-    # v0.3.0 fields.
+    # The NL episode was written AND a structured Entity MERGE fired with
+    # all the v0.3.0 fields.
     mock_client.add_episode.assert_awaited_once()
     mock_client.driver.execute_query.assert_awaited_once()
 
-    set_query, set_kwargs = (
-        mock_client.driver.execute_query.call_args.args,
-        mock_client.driver.execute_query.call_args.kwargs,
-    )
-    query_text = set_query[0]
-    params = set_kwargs.get("params", {})
+    call = mock_client.driver.execute_query.call_args
+    query_text = call.args[0]
+    params = call.kwargs.get("params", {})
 
-    # Cypher must contain a SET for each v0.3.0 field.
+    # Cypher must MERGE a real :Entity node (label required by every
+    # decision-reading query in mcp_server/queries.py/tools_write.py) and SET
+    # each v0.3.0 field.
+    assert "MERGE (d:Entity {uuid: $uuid})" in query_text
     for prop in (
-        "n.validated",
-        "n.base_confidence",
-        "n.last_reinforced_at",
-        "n.source",
-        "n.write_policy",
+        "d.type = 'Decision'",
+        "d.validated",
+        "d.base_confidence",
+        "d.last_reinforced_at",
+        "d.source",
+        "d.write_policy",
     ):
-        assert prop in query_text, f"post-hoc SET missing {prop}"
+        assert prop in query_text, f"structured MERGE missing {prop}"
 
     # Parameters must carry the actual values, not the defaults.
     assert params["validated"] is False
     assert params["base_confidence"] == 0.6
     assert params["source"] == "watcher"
-    assert params["commit_sha"] == "deadbeef"
-    # Post-pass-2: the SET must target by uuid (name-fallback was removed to
-    # avoid mis-targeting sibling nodes with colliding short-SHA names).
-    assert params["uuid"] == "episode-uuid-abc"
-    assert "n.uuid = $uuid" in query_text
+    assert params["source_commit"] == "deadbeef"
+    assert params["text"] == "switch to EdDSA"
+
+    # The structured node's identity is self-generated — NOT the episode's
+    # uuid (that would silently match zero :Entity rows).
+    assert params["uuid"] != "episode-uuid-abc"
+    import uuid as _uuid
+    _uuid.UUID(params["uuid"])  # raises if not a real uuid4 string
 
 
 @pytest.mark.asyncio
-async def test_write_decision_raises_memex_write_error_when_uuid_missing(mock_client):
-    """When Graphiti returns no episode.uuid and fallback name lookup also fails,
-    write_decision must raise MemexWriteError."""
-    # Episode object with NO uuid attribute.
+async def test_write_decision_structured_merge_independent_of_episode_uuid(mock_client):
+    """write_decision's structured Entity MERGE no longer depends on
+    add_episode()'s episode.uuid at all (it never could safely target it --
+    that uuid belongs to a different node, the :Episodic episode, not the
+    :Entity the rest of the codebase queries for). Even when Graphiti
+    returns an episode object with NO uuid attribute, the structured MERGE
+    still fires using write_decision's own self-generated uuid."""
+    # Episode object with NO uuid attribute at all.
     mock_episode = MagicMock(spec=[])
     mock_result = MagicMock(episode=mock_episode)
     mock_client.add_episode.return_value = mock_result
-    
-    # Mock fallback query to return empty records
     mock_client.driver.execute_query.return_value = MagicMock(records=[])
 
     decision = MagicMock()
@@ -247,16 +260,21 @@ async def test_write_decision_raises_memex_write_error_when_uuid_missing(mock_cl
     decision.rationale = "any"
     decision.scope = "local"
 
-    with pytest.raises(MemexWriteError, match="not found after add_episode"):
-        await write_decision(decision, modules=["x.py"], commit_sha="abcd1234")
+    # Must not raise -- the missing episode.uuid is irrelevant to the
+    # structured write now.
+    await write_decision(decision, modules=["x.py"], commit_sha="abcd1234")
 
     mock_client.add_episode.assert_awaited_once()
+    mock_client.driver.execute_query.assert_awaited_once()
+    params = mock_client.driver.execute_query.call_args.kwargs.get("params", {})
+    assert params["uuid"]  # a real, self-generated uuid was used regardless
 
 
 @pytest.mark.asyncio
-async def test_write_decision_logs_warning_when_post_hoc_set_fails(mock_client):
-    """If Neo4j rejects the post-hoc SET, the write does not crash — the
-    episode is already in the graph; missing flags can be backfilled."""
+async def test_write_decision_logs_warning_when_structured_merge_fails(mock_client):
+    """If FalkorDB rejects the structured Decision MERGE, the write does not
+    crash — the NL episode is already in the graph; type='Decision' metadata
+    can be backfilled."""
     mock_result = MagicMock(episode=MagicMock(uuid="uuid-x"))
     mock_client.add_episode.return_value = mock_result
     mock_client.driver.execute_query.side_effect = Exception("transient")
@@ -266,5 +284,6 @@ async def test_write_decision_logs_warning_when_post_hoc_set_fails(mock_client):
     decision.rationale = "reason"
     decision.scope = "local"
 
-    # Must not raise — Pydantic validates, episode is written, SET fails silently.
+    # Must not raise — Pydantic validates, episode is written, structured
+    # MERGE fails silently (logged as a warning).
     await write_decision(decision, modules=["x.py"], commit_sha="abcd1234")
