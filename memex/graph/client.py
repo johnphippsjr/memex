@@ -3,7 +3,7 @@ from typing import Optional, List
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.client import CrossEncoderClient
 from graphiti_core.driver.falkordb_driver import FalkorDriver
-from graphiti_core.llm_client.openai_client import OpenAIClient
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from memex.config import get_config
@@ -41,12 +41,22 @@ class GraphClient:
             )
 
             # Configure LLM Client — LiteLLM gateway, OpenAI-compatible.
+            #
+            # OpenAIGenericClient (NOT graphiti-core's dedicated OpenAIClient) — verified
+            # 2026-08-01: OpenAIClient._create_structured_completion() calls OpenAI's
+            # Responses API (`client.responses.parse()`), and our gateway -> DeepInfra
+            # rejects every one of those calls with HTTP 400 "tools must not be an empty
+            # array" (litellm.BadRequestError / DeepinfraException), so add_episode() never
+            # persisted a single node. OpenAIGenericClient instead uses the plain
+            # chat.completions.create() + response_format={"type": "json_schema", ...} path,
+            # which DeepInfra accepts — confirmed live by writing a real Episodic+Entity
+            # node with embedding to a test graph.
             llm_config = LLMConfig(
                 api_key=config.litellm_api_key,
                 base_url=config.litellm_base_url,
                 model=config.litellm_model,
             )
-            llm_client = OpenAIClient(config=llm_config)
+            llm_client = OpenAIGenericClient(config=llm_config)
 
             # Configure Embedder — same gateway, bge-m3 (MUST match the
             # model + dims the mem0 seed graph was embedded with, or the
