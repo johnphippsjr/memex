@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+from neo4j import EagerResult
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.driver.falkordb_driver import FalkorDriver
@@ -9,6 +10,29 @@ from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from memex.config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+class _CompatRecord(dict):
+    """A plain-dict row that also satisfies ``neo4j.Record``'s ``.data()``
+    accessor.
+
+    FalkorDriver.execute_query already converts each FalkorDB result row into
+    a plain ``dict`` (see its source) — but ~20 memex call sites across
+    cli_graph.py/cli_review.py/graph/cluster.py/graph/cluster_summary.py/
+    graph/stats.py/mcp_server/queries.py/mcp_server/team.py/
+    mcp_server/tools_explain.py/mcp_server/graph_query.py/
+    memory_tool/projection.py call ``record.data()`` on each row, matching
+    real ``neo4j.Record``'s API (a plain ``dict`` has no ``.data()``). This
+    thin subclass is a no-op for every existing dict use (indexing, ``.get``,
+    iteration all still work unchanged) and additionally answers ``.data()``
+    the same way ``neo4j.Record.data()`` does with no args — return every
+    field as a plain dict.
+    """
+
+    def data(self, *keys) -> dict:
+        if keys:
+            return {k: self.get(k) for k in keys}
+        return dict(self)
 
 
 class CompatFalkorDriver(FalkorDriver):
@@ -49,7 +73,45 @@ class CompatFalkorDriver(FalkorDriver):
         params = kwargs.pop("params", None)
         if params:
             kwargs.update(params)
-        return await super().execute_query(cypher_query_, **kwargs)
+        raw = await super().execute_query(cypher_query_, **kwargs)
+
+        # Second half of the same Neo4jDriver-convention restoration this
+        # class exists for: graphiti_core.driver.falkordb_driver.FalkorDriver
+        # .execute_query returns a bare ``(records, header, None)`` tuple,
+        # NOT graphiti-core's Neo4jDriver.execute_query return type
+        # (``neo4j.EagerResult``, a NamedTuple exposing `.records`/
+        # `.summary`/`.keys`). Every memex call site that reads a query's
+        # result — graph/writer.py's write_call_edges/_get_episode_uuid,
+        # graph/cluster.py, graph/cluster_runner.py, graph/cluster_summary.py,
+        # graph/stats.py, graph/decay.py, cli_graph.py, mcp_server/queries.py
+        # (the whole MCP read-tool surface), mcp_server/team.py,
+        # mcp_server/tools_explain.py, mcp_server/tools_impact.py,
+        # mcp_server/tools_write.py, mcp_server/graph_query.py,
+        # watcher/handlers.py — was written against that Neo4j convention
+        # and does ``result.records`` directly. Left unwrapped, EVERY one of
+        # those raises ``AttributeError: 'tuple' object has no attribute
+        # 'records'`` on FalkorDB: most are caught by a bare
+        # ``except Exception`` and logged as a false failure (e.g.
+        # write_call_edges's "CALLS edge write failed", which fired on every
+        # single edge despite the edge having already been written by the
+        # same MERGE), a few propagate straight into MemexQueryError and
+        # break the MCP read surface outright. Wrapping FalkorDriver's tuple
+        # in a real ``neo4j.EagerResult`` here — the exact same kind of
+        # normalization this class already does for the ``params=`` calling
+        # convention above — fixes every one of those call sites at once
+        # instead of patching each individually. ``neo4j`` itself is an
+        # unconditional dependency of graphiti-core (not gated behind the
+        # ``[falkordb]`` extra), so this import is always available.
+        if raw is None:
+            # FalkorDriver.execute_query returns bare None on a benign
+            # "index already exists" race (see its source) — treat as zero
+            # rows rather than let `.records` raise on NoneType downstream.
+            return EagerResult(records=[], summary=None, keys=[])
+        if isinstance(raw, tuple):
+            records, header, _ = raw
+            records = [_CompatRecord(r) for r in (records or [])]
+            return EagerResult(records=records, summary=None, keys=header or [])
+        return raw
 
 
 class GraphClient:
