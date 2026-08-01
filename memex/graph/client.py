@@ -1,7 +1,7 @@
 import logging
-from typing import Optional, List
+from typing import Optional
 from graphiti_core import Graphiti
-from graphiti_core.cross_encoder.client import CrossEncoderClient
+from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.driver.falkordb_driver import FalkorDriver
 from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 from graphiti_core.llm_client.config import LLMConfig
@@ -9,13 +9,6 @@ from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from memex.config import get_config
 
 logger = logging.getLogger(__name__)
-
-class NoOpCrossEncoder(CrossEncoderClient):
-    """
-    A CrossEncoder that does nothing, to bypass OpenAI requirements in Graphiti.
-    """
-    async def rank(self, query: str, documents: List[str]) -> List[float]:
-        return [0.5] * len(documents)
 
 
 class CompatFalkorDriver(FalkorDriver):
@@ -124,6 +117,29 @@ class GraphClient:
             )
             embedder = OpenAIEmbedder(config=embedder_config)
 
+            # Cross-encoder / reranker — LiteLLM gateway, OpenAI-compatible.
+            #
+            # graphiti-core 0.29.3 defaults to OpenAIRerankerClient() (its own
+            # bare AsyncOpenAI() client, which needs a real OPENAI_API_KEY and
+            # talks to api.openai.com) whenever `cross_encoder` isn't passed
+            # explicitly to Graphiti(). The original port avoided that hard
+            # OpenAI dependency by passing a `NoOpCrossEncoder` stub instead —
+            # but that meant no query path could ever get real reranking, even
+            # once memex's own search layer grows a `search_()` call site that
+            # asks for `EdgeReranker.cross_encoder` (graphiti_core/search/
+            # search.py only invokes `cross_encoder.rank()` for that reranker
+            # kind; NoOpCrossEncoder's uniform 0.5 score made such a call a
+            # silent shuffle). We already have an OpenAI-compatible gateway, so
+            # point graphiti-core's REAL OpenAIRerankerClient at it (same
+            # litellm_base_url/api_key/model as the LLM client above) instead
+            # of standing up a second, separate reranker model.
+            reranker_config = LLMConfig(
+                api_key=config.litellm_api_key,
+                base_url=config.litellm_base_url,
+                model=config.litellm_model,
+            )
+            cross_encoder = OpenAIRerankerClient(config=reranker_config)
+
             # Initialize Graphiti. `graph_driver=` (not `uri=`) is required
             # for a non-Neo4j backend — passing `uri="falkor://..."` is NOT
             # supported by graphiti-core 0.29.x's Graphiti.__init__: when
@@ -133,7 +149,7 @@ class GraphClient:
                 graph_driver=falkor_driver,
                 llm_client=llm_client,
                 embedder=embedder,
-                cross_encoder=NoOpCrossEncoder()
+                cross_encoder=cross_encoder,
             )
             logger.info(
                 "Graphiti client initialized (FalkorDB %s:%s/%s, LiteLLM model %s, structured_output_mode=%s)",
