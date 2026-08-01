@@ -8,6 +8,7 @@ from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from memex.config import get_config
+from memex.graph.graphiti_query_patches import apply_all_patches
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,13 @@ class GraphClient:
     async def get_instance(cls) -> Graphiti:
         if cls._instance is None:
             config = get_config()
+
+            # board #781: two query-side graphiti-core defects (BM25
+            # fulltext dead due to group_id escaping; HNSW vector indexes
+            # built but never queried) - see graphiti_query_patches.py for
+            # the full writeup and verification. Must be applied before the
+            # driver below runs its first search.
+            apply_all_patches()
 
             # FalkorDB graph driver. `database` is the FalkorDB graph key —
             # this MUST match config.unified_group_id (see config.py comment
