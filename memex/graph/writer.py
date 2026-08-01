@@ -242,12 +242,19 @@ async def _get_episode_uuid(client, episode_name: str, episode_uuid: str | None)
     """
     Returns episode_uuid if already known.
     If None, attempts a fallback Cypher lookup by episode name:
-        MATCH (n:Entity) WHERE n.name = $name RETURN coalesce(n.uuid, elementId(n)) as uuid LIMIT 1
-    Returns None if still not found.
+        MATCH (n:Entity) WHERE n.name = $name RETURN n.uuid as uuid LIMIT 1
+
+    Neo4j's ``elementId(n)`` is NOT implemented by FalkorDB — a query using it
+    fails to PARSE at all (not merely "function not found" for that clause),
+    so the whole MATCH/RETURN would error out. Every node graphiti-core
+    persists (via ``add_episode`` / ``EntityNode.save`` /
+    ``EpisodicNode.save``) always carries a real ``uuid`` property, so
+    ``coalesce(n.uuid, elementId(n))``'s Neo4j-only fallback branch is both
+    unsupported here and unnecessary.
     """
     if episode_uuid is not None:
         return episode_uuid
-    query = "MATCH (n:Entity) WHERE n.name = $name RETURN coalesce(n.uuid, elementId(n)) as uuid LIMIT 1"
+    query = "MATCH (n:Entity) WHERE n.name = $name RETURN n.uuid as uuid LIMIT 1"
     try:
         res = await client.driver.execute_query(query, params={"name": episode_name})
         if res.records:
@@ -332,9 +339,14 @@ async def write_decision(decision, modules: list[str], commit_sha: str, confiden
             f"and fallback query. Graphiti may be in an inconsistent state."
         )
     else:
+        # FalkorDB-supported identity match: graphiti-core always sets a real
+        # `uuid` property on every node it persists, so matching on that
+        # alone (instead of Neo4j-only `elementId(n)`, which FalkorDB's
+        # Cypher parser rejects outright — the whole query fails to parse,
+        # not just that clause) is both sufficient and portable.
         set_query = """
         MATCH (n:Entity)
-        WHERE n.uuid = $uuid OR elementId(n) = $uuid
+        WHERE n.uuid = $uuid
         SET n.validated = $validated,
             n.base_confidence = $base_confidence,
             n.last_reinforced_at = $now,
@@ -431,9 +443,12 @@ async def write_lockfile_delta(
             continue
 
         episode_uuid = getattr(getattr(result, "episode", None), "uuid", None)
+        # Same FalkorDB-portable identity match as write_decision's set_query
+        # above — `elementId()` is Neo4j-only and fails FalkorDB's Cypher
+        # parser outright.
         set_query = """
         MATCH (n:Entity)
-        WHERE n.uuid = $uuid OR elementId(n) = $uuid
+        WHERE n.uuid = $uuid
         SET n.type = 'Dependency',
             n.ecosystem = $ecosystem,
             n.version = $version,
