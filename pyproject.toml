@@ -53,6 +53,14 @@ dependencies = [
     # falkordb-litellm fork: FalkorDB backend + OpenAI-compatible client
     # (pointed at our LiteLLM gateway) replace Neo4j + Gemini.
     "graphiti-core[falkordb]>=0.29.0,<1.0.0",
+    # Pin below redis 8: graphiti-core[falkordb] pulls unpinned redis, which
+    # resolves to 8.1.0. redis 8's new HIMPORT feature adds a `himport_registry`
+    # kwarg to the async connection_kwargs; FalkorDB's python client Is_Cluster()
+    # probe copies those kwargs into a SYNC redis.Redis(**kwargs) call, which
+    # rejects the unknown kwarg with a TypeError on every connection attempt —
+    # so FalkorDB never connects. redis 7.4.1 (the top of this range) is
+    # confirmed working. Verified 2026-08-01.
+    "redis>=7,<8",
     "openai>=1.50.0,<3.0.0",
     "tree-sitter-language-pack>=1.8.0,<2.0.0",
     "watchdog>=6.0.0,<7.0.0",
