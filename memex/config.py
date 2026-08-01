@@ -1,1 +1,344 @@
-aW1wb3J0IG9zCmltcG9ydCByZQppbXBvcnQgc3VicHJvY2VzcwppbXBvcnQgeWFtbApmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKZnJvbSBweWRhbnRpYyBpbXBvcnQgQmFzZU1vZGVsLCBGaWVsZApmcm9tIHR5cGluZyBpbXBvcnQgT3B0aW9uYWwsIExpc3QsIERpY3QKZnJvbSB1cmxsaWIucGFyc2UgaW1wb3J0IHVybHBhcnNlCmZyb20gZG90ZW52IGltcG9ydCBsb2FkX2RvdGVudgoKIyBMb2FkIC5lbnYgZmlsZSBpZiBpdCBleGlzdHMKbG9hZF9kb3RlbnYoKQoKCiMgU0NQLXNob3J0aGFuZCBnaXQgcmVtb3RlIGZvcm06IGBbdXNlckBdaG9zdDpwYXRoYCAoZS5nLiBgZ2l0QGdpdGh1Yi5jb206b3JnL3JlcG8uZ2l0YCkuCiMgVmVyaWZpZWQgYWdhaW5zdCBwaXAncyBvd24gVkNTIFVSTCBub3JtYWxpemVyIChwaXAvX2ludGVybmFsL3Zjcy9naXQucHkpIOKAlCBzZWUKIyAwMC1SRVNFQVJDSC5tZCBQYXR0ZXJuIDIuCl9TQ1BfTElLRSA9IHJlLmNvbXBpbGUociJeKD86KD9QPHVzZXI+W1x3Li1dKylAKT8oP1A8aG9zdD5bXi86XSspOig/UDxwYXRoPltcdy4tXVteOl0qKSQiKQoKCmRlZiBub3JtYWxpemVfZ2l0X3JlbW90ZV91cmwodXJsOiBPcHRpb25hbFtzdHJdKSAtPiBPcHRpb25hbFtzdHJdOgogICAgIiIiTm9ybWFsaXplIGEgZ2l0IHJlbW90ZSBVUkwgKFNTSCwgSFRUUFMsIFNDUC1zaG9ydGhhbmQsIG9yIHNlbGYtaG9zdGVkCiAgICB3aXRoIGEgY3VzdG9tIHBvcnQpIGludG8gb25lIGNhbm9uaWNhbCBgYGhvc3QvcGF0aGBgIHN0cmluZyBzbyB0d28KICAgIGNsb25lcyBvZiB0aGUgc2FtZSByZXBvIGNvbnZlcmdlIG9uIHRoZSBzYW1lIGBgcHJvamVjdF9pZGBgIChORVQtMDEpLgoKICAgIE5ldmVyIHJhaXNlcy4gUmV0dXJucyBgYE5vbmVgYCBmb3IgZmFsc3kgaW5wdXQsIHVucmVjb2duaXplZCBmb3Jtcywgb3IKICAgIGEgbG9jYWwgYmFyZS1yZXBvIHBhdGggKFBpdGZhbGwgMSDigJQgYSBXaW5kb3dzL1BPU0lYIGZpbGVzeXN0ZW0gcGF0aCBjYW4KICAgIHN1cGVyZmljaWFsbHkgbWF0Y2ggdGhlIFNDUC1zaG9ydGhhbmQgcmVnZXgsIHNvIGBvcy5wYXRoLmV4aXN0cygpYCBpcwogICAgY2hlY2tlZCBGSVJTVCwgZXhhY3RseSBtYXRjaGluZyBwaXAncyBvd24gb3JkZXJpbmcpLiBPbmx5IHRoZSBob3N0bmFtZQogICAgaXMgbG93ZXItY2FzZWQ7IHRoZSBwYXRoIGNhc2UgaXMgcHJlc2VydmVkIChQaXRmYWxsIDUgLyBBc3N1bXB0aW9uIEExKS4KICAgICIiIgogICAgaWYgbm90IHVybDoKICAgICAgICByZXR1cm4gTm9uZQogICAgdXJsID0gdXJsLnN0cmlwKCkKICAgIGlmIG5vdCB1cmw6CiAgICAgICAgcmV0dXJuIE5vbmUKCiAgICAjIEd1YXJkIEZJUlNUOiBhIGxvY2FsIGJhcmUtcmVwbyBwYXRoIChlLmcuIFdpbmRvd3MgIkM6XFxyZXBvc1xcc2hhcmVkLmdpdCIpCiAgICAjIGNhbiBzdXBlcmZpY2lhbGx5IG1hdGNoIHRoZSBTQ1Atc2hvcnRoYW5kIHJlZ2V4IGJlbG93IGJlY2F1c2UgYQogICAgIyBzaW5nbGUtbGV0dGVyIGRyaXZlICJob3N0IiBwcmVjZWRlcyBhIGNvbG9uLiBDaGVjayBmaWxlc3lzdGVtCiAgICAjIGV4aXN0ZW5jZSBiZWZvcmUgYXR0ZW1wdGluZyB0aGUgcmVnZXggKFBpdGZhbGwgMSkuCiAgICBpZiBvcy5wYXRoLmV4aXN0cyh1cmwpOgogICAgICAgIHJldHVybiBOb25lCgogICAgaWYgbm90IHJlLm1hdGNoKHIiXlx3KzovLyIsIHVybCk6CiAgICAgICAgbSA9IF9TQ1BfTElLRS5tYXRjaCh1cmwpCiAgICAgICAgaWYgbToKICAgICAgICAgICAgdXJsID0gZiJzc2g6Ly97bS5ncm91cCgnaG9zdCcpfS97bS5ncm91cCgncGF0aCcpfSIKICAgICAgICBlbHNlOgogICAgICAgICAgICByZXR1cm4gTm9uZSAgIyB1bnJlY29nbml6ZWQgZm9ybSDigJQgY2FsbGVyIGZhbGxzIGJhY2sKCiAgICBwYXJzZWQgPSB1cmxwYXJzZSh1cmwpCiAgICBob3N0ID0gKHBhcnNlZC5ob3N0bmFtZSBvciAiIikubG93ZXIoKQogICAgaWYgbm90IGhvc3Q6CiAgICAgICAgcmV0dXJuIE5vbmUKICAgIHBhdGggPSBwYXJzZWQucGF0aC5zdHJpcCgiLyIpCiAgICBpZiBwYXRoLmxvd2VyKCkuZW5kc3dpdGgoIi5naXQiKToKICAgICAgICBwYXRoID0gcGF0aFs6IC1sZW4oIi5naXQiKV0KICAgIGlmIG5vdCBob3N0IG9yIG5vdCBwYXRoOgogICAgICAgIHJldHVybiBOb25lCiAgICByZXR1cm4gZiJ7aG9zdH0ve3BhdGh9IgoKCmRlZiBfZ2V0X2dpdF9yZW1vdGVfdXJsKHJlcG9fcGF0aDogc3RyKSAtPiBPcHRpb25hbFtzdHJdOgogICAgIiIiUnVuIGBnaXQgcmVtb3RlIGdldC11cmwgb3JpZ2luYCBpbiBgYHJlcG9fcGF0aGBgLiBOZXZlciByYWlzZXMg4oCUCiAgICByZXR1cm5zIGBgTm9uZWBgIG9uIGFueSBmYWlsdXJlIChubyByZW1vdGUsIG5vIGdpdCwgdGltZW91dCwgZXRjLiksCiAgICBtYXRjaGluZyB0aGUgZXhpc3RpbmcgY29udmVudGlvbiBpbgogICAgYG1lbWV4L3dhdGNoZXIvZ2l0X2hvb2sucHk6OmVtaXRfY29tbWl0X2V2ZW50YCAoUGl0ZmFsbCA0KS4iIiIKICAgIHRyeToKICAgICAgICBvdXRwdXQgPSBzdWJwcm9jZXNzLmNoZWNrX291dHB1dCgKICAgICAgICAgICAgWyJnaXQiLCAicmVtb3RlIiwgImdldC11cmwiLCAib3JpZ2luIl0sCiAgICAgICAgICAgIGN3ZD1yZXBvX3BhdGgsCiAgICAgICAgICAgIHN0ZGVycj1zdWJwcm9jZXNzLkRFVk5VTEwsCiAgICAgICAgKQogICAgICAgIHRleHQgPSBvdXRwdXQuZGVjb2RlKCkuc3RyaXAoKQogICAgICAgIHJldHVybiB0ZXh0IG9yIE5vbmUKICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgcmV0dXJuIE5vbmUKCgpkZWYgcmVzb2x2ZV9wcm9qZWN0X2lkKHJlcG9fcGF0aDogc3RyKSAtPiBPcHRpb25hbFtzdHJdOgogICAgIiIiUmVzb2x2ZSBhIHBhdGgtaW5kZXBlbmRlbnQgYGBwcm9qZWN0X2lkYGAgc2NvcGluZyBrZXkgZm9yIGBgcmVwb19wYXRoYGAsCiAgICBwZXIgdGhlIGxvY2tlZCByZXNvbHV0aW9uIG9yZGVyIChORVQtMDEpOiAoMSkgbm9ybWFsaXplZCBnaXQgcmVtb3RlCiAgICBpZGVudGl0eSDigJQgbW9zdCBhdXRob3JpdGF0aXZlLCBzaGFyZWQgYWNyb3NzIHRoZSB0ZWFtOyAoMikgZWxzZSB0aGUKICAgIGNvbnRlbnRzIG9mIGBgPHJlcG9fcGF0aD4vLm1lbWV4L3Byb2plY3RfaWRgYCAod3JpdHRlbiBieQogICAgYG1lbWV4IGluaXQgLS1wcm9qZWN0LWlkIDxpZD5gKTsgKDMpIGVsc2UgYGBOb25lYGAgKHVuY2hhbmdlZCBzaW5nbGUtZGV2CiAgICBiZWhhdmlvciDigJQgY2FsbGVycyBmYWxsIGJhY2sgdG8gYGNhbm9uaWNhbF9yZXBvX3BhdGgoKWAgdGhlbXNlbHZlczsgdGhlCiAgICB0d28gcmVzb2x2ZXJzIHN0YXkgb3J0aG9nb25hbCBwZXIgMDAtUkVTRUFSQ0gubWQgUGF0dGVybiAxKS4KCiAgICBOZXZlciByYWlzZXMgcmVnYXJkbGVzcyBvZiBnaXQvZmlsZXN5c3RlbSBzdGF0ZS4KICAgICIiIgogICAgcmVtb3RlID0gX2dldF9naXRfcmVtb3RlX3VybChyZXBvX3BhdGgpCiAgICBpZiByZW1vdGU6CiAgICAgICAgbm9ybWFsaXplZCA9IG5vcm1hbGl6ZV9naXRfcmVtb3RlX3VybChyZW1vdGUpCiAgICAgICAgaWYgbm9ybWFsaXplZDoKICAgICAgICAgICAgcmV0dXJuIG5vcm1hbGl6ZWQKCiAgICB0cnk6CiAgICAgICAgcHJvamVjdF9maWxlID0gUGF0aChyZXBvX3BhdGgpIC8gIi5tZW1leCIgLyAicHJvamVjdF9pZCIKICAgICAgICBpZiBwcm9qZWN0X2ZpbGUuZXhpc3RzKCk6CiAgICAgICAgICAgIHRleHQgPSBwcm9qZWN0X2ZpbGUucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpLnN0cmlwKCkKICAgICAgICAgICAgaWYgdGV4dDoKICAgICAgICAgICAgICAgIHJldHVybiB0ZXh0CiAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgIHBhc3MKCiAgICByZXR1cm4gTm9uZQoKCmRlZiBjYW5vbmljYWxfcmVwb19wYXRoKHA6IE9wdGlvbmFsW3N0cl0pIC0+IE9wdGlvbmFsW3N0cl06CiAgICAiIiJDYW5vbmljYWxpemUgYSByZXBvIHBhdGggc28gdGhlIHdhdGNoZXIgKHdyaXRlKSBhbmQgTUNQIHNlcnZlciAocmVhZCkKICAgIGFsd2F5cyBwcm9kdWNlIHRoZSBieXRlLWlkZW50aWNhbCBgcmVwb19wYXRoYCBqb2luIGtleSAoYXVkaXQgQjEpLgoKICAgIENvbGxhcHNlcyBgLmAvYC4uYC90cmFpbGluZyBzZXBhcmF0b3JzIGFuZCBzeW1saW5rcyB2aWEgYGByZXNvbHZlKClgYCwKICAgIGVtaXRzIFBPU0lYIHNlcGFyYXRvcnMsIGFuZCBjYXNlLWZvbGRzIG9uIFdpbmRvd3MgKGNhc2UtaW5zZW5zaXRpdmUgRlMpLgogICAgSWRlbXBvdGVudC4gUGFzc2VzIHRocm91Z2ggYGBOb25lYGAvZW1wdHkgdW5jaGFuZ2VkIHNvIGNhbGxlcnMgZG9uJ3QgaGF2ZQogICAgdG8gc3BlY2lhbC1jYXNlIHRoZW0uCiAgICAiIiIKICAgIGlmIG5vdCBwOgogICAgICAgIHJldHVybiBwCiAgICB0cnk6CiAgICAgICAgcmVzb2x2ZWQgPSBQYXRoKHApLnJlc29sdmUoKQogICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICByZXNvbHZlZCA9IFBhdGgocCkKICAgIHMgPSByZXNvbHZlZC5hc19wb3NpeCgpCiAgICBpZiBvcy5uYW1lID09ICJudCI6CiAgICAgICAgcyA9IHMubG93ZXIoKQogICAgcmV0dXJuIHMKCmNsYXNzIEhhcm5lc3NDb25maWcoQmFzZU1vZGVsKToKICAgIGluaXRpYWxfZGVjaXNpb25fY29uZmlkZW5jZTogZmxvYXQgPSAwLjYKICAgIGNvcnJvYm9yYXRpb25fd2luZG93X2RheXM6IGludCA9IDE0CgoKIyBQaGFzZSA3IOKAlCBSZXRyaWV2YWwgY29tcG9zaXRlLXJlcmFua2VyIGNvbmZpZyAoQVJDSElURUNUVVJFLXYwLjMuMCDCpzgpLgojIERlZmF1bHRzIG1pcnJvciB0aGUgbW9kdWxlIGNvbnN0YW50cyBpbiBgYG1lbWV4Lm1jcF9zZXJ2ZXIucmVyYW5rZXJgYCBzbwojIGV4cGxpY2l0IGNvbmZpZyBhbmQgbW9kdWxlLWRlZmF1bHQgYmVoYXZpb3VyIHN0YXkgaW4gc3luYy4KY2xhc3MgUmV0cmlldmFsQ29uZmlnKEJhc2VNb2RlbCk6CiAgICByZWNlbmN5X3RhdV9kYXlzOiBpbnQgPSA5MCAgICAgICAgICAgICAgICAjIM+EIOKAlCBleHBvbmVudGlhbCBkZWNheSAoZGF5cykKICAgIGNvbmZfZmxvb3I6IGZsb2F0ID0gMC41ICAgICAgICAgICAgICAgICAgICMgY29uZmlkZW5jZSBmYWN0b3IgZmxvb3IKICAgIHJlaGVhcnNhbF93ZWlnaHQ6IGZsb2F0ID0gMC4xICAgICAgICAgICAgICMgYWNjZXNzX2NvdW50IGxvZyBjb2VmZmljaWVudAogICAgcnJmX2s6IGludCA9IDYwICAgICAgICAgICAgICAgICAgICAgICAgICAgIyBSUkYgY29uc3RhbnQgZm9yIGNyb3NzLW1vZGFsaXR5IG1lcmdlCiAgICBjb25mbGljdF9zaW1pbGFyaXR5X3RocmVzaG9sZDogZmxvYXQgPSAwLjQgICMgYmVsb3cgdGhpcyArIG92ZXJsYXBwaW5nIHZhbGlkaXR5ID0gY29uZmxpY3QgKFBoYXNlIDcpCiAgICBjb250cmFkaWN0aW9uX3NpbWlsYXJpdHlfdGhyZXNob2xkOiBmbG9hdCA9IDAuODUgICMgTUNQLXdyaXRlIGludGVudC1jb25maXJtYXRpb24gdGhyZXNob2xkIChQaGFzZSA5KQoKCmNsYXNzIENvbmZpZyhCYXNlTW9kZWwpOgogICAgIyAtLS0gRmFsa29yREIgYmFja2VuZCAocmVwbGFjZXMgTmVvNGog4oCUIHYwLjcuMCBmb3JrOiBmYWxrb3JkYi1saXRlbGxtKSAtLS0KICAgIGZhbGtvcl9ob3N0OiBzdHIKICAgIGZhbGtvcl9wb3J0OiBpbnQgPSA2Mzc5CiAgICAjIPCfmqggVGhpcyB2YWx1ZSBkb3VibGVzIGFzIHRoZSBHcmFwaGl0aSBgZ3JvdXBfaWRgIHBhcnRpdGlvbiB0aHJlYWRlZAogICAgIyB0aHJvdWdoIGV2ZXJ5IGBhZGRfZXBpc29kZSgpYCBjYWxsIChzZWUgZ3JhcGgvd3JpdGVyLnB5KS4gZ3JhcGhpdGktY29yZQogICAgIyAwLjI5LngncyBgR3JhcGhpdGkuYWRkX2VwaXNvZGUoKWAgdHJlYXRzIGFuIGV4cGxpY2l0IGBncm91cF9pZGAgYXMgdGhlCiAgICAjICpwaHlzaWNhbCogRmFsa29yREIgZGF0YWJhc2UgbmFtZSB3aGVuZXZlciBpdCBkaWZmZXJzIGZyb20gdGhlIGRyaXZlcidzCiAgICAjIGFscmVhZHktY29uZmlndXJlZCBkYXRhYmFzZSDigJQgaXQgY2FsbHMgYHNlbGYuZHJpdmVyLmNsb25lKGRhdGFiYXNlPQogICAgIyBncm91cF9pZClgIGFuZCBzd2FwcyB0aGUgc2luZ2xldG9uJ3MgZHJpdmVyIG91dCBmcm9tIHVuZGVyIGl0CiAgICAjIChncmFwaGl0aV9jb3JlL2dyYXBoaXRpLnB5KS4gYGZhbGtvcl9ncmFwaGAgYW5kIGB1bmlmaWVkX2dyb3VwX2lkYCBNVVNUCiAgICAjIGFsd2F5cyBiZSBzZXQgdG8gdGhlIGV4YWN0IHNhbWUgc3RyaW5nLCBvciB3cml0ZXMgd2lsbCBzaWxlbnRseQogICAgIyBmcmFnbWVudCBhY3Jvc3MgdHdvIGRpZmZlcmVudCBwaHlzaWNhbCBncmFwaHMuCiAgICBmYWxrb3JfZ3JhcGg6IHN0ciA9ICJtZW0wLXNlZWQtbG9jYWwtdmVyaWZ5IgoKICAgICMgLS0tIExpdGVMTE0gZ2F0ZXdheSAoT3BlbkFJLWNvbXBhdGlibGUpIOKAlCByZXBsYWNlcyBkaXJlY3QgR2VtaW5pIGNhbGxzIC0tLQogICAgbGl0ZWxsbV9iYXNlX3VybDogc3RyCiAgICBsaXRlbGxtX2FwaV9rZXk6IHN0cgogICAgbGl0ZWxsbV9tb2RlbDogc3RyCiAgICAjIFBoYXNlIDkg4oCUIGdyb3VuZGVkLXN5bnRoZXNpcyBtb2RlbCB1c2VkIGJ5IGV4cGxhaW5fY2hhbmdlIChwcmV2aW91c2x5CiAgICAjIEdlbWluaSBQcm8pLiBEZWZhdWx0cyB0byB0aGUgc2FtZSBleHRyYWN0aW9uIG1vZGVsIGFzIGxpdGVsbG1fbW9kZWw7CiAgICAjIG92ZXJyaWRlIGF0IGRlcGxveSB0aW1lIGZvciBhIHN0cm9uZ2VyIG1vZGVsIGlmIHRoZSBnYXRld2F5IGV4cG9zZXMgb25lLgogICAgcHJvX21vZGVsOiBzdHIgPSAibWVtMC1leHRyYWN0LTM1YiIKCiAgICAjIGdyYXBoaXRpX2NvcmUubGxtX2NsaWVudC5vcGVuYWlfZ2VuZXJpY19jbGllbnQuT3BlbkFJR2VuZXJpY0NsaWVudCdzCiAgICAjIHN0cnVjdHVyZWQtb3V0cHV0IG1vZGUgKCJqc29uX3NjaGVtYSIgbmF0aXZlIGNvbnN0cmFpbmVkIGRlY29kaW5nLCBvcgogICAgIyAianNvbl9vYmplY3QiIHdpdGggdGhlIHNjaGVtYSBlbWJlZGRlZCBpbi1wcm9tcHQgYW5kIHZhbGlkYXRlZAogICAgIyBjbGllbnQtc2lkZSkuIERlZmF1bHRzIHRvICJqc29uX29iamVjdCIgYmVjYXVzZSB0aGF0IGlzIHdoYXQgdGhpcwogICAgIyBmb3JrJ3MgZGVmYXVsdCBsaXRlbGxtX21vZGVsIChxd2VuMy41LTM1Yiwgc2VydmVkIGxvY2FsbHkgdmlhCiAgICAjIGxsYW1hLXN3YXAgb24gdGhlIC4xMzMgUjk3MDApIGFjdHVhbGx5IG5lZWRzIC0tIHRoZSBzYW1lIHJlYXNvbiBvdXIKICAgICMgcHJvZHVjdGlvbiBncmFwaGl0aS1tY3AgZGVwbG95bWVudCBydW5zCiAgICAjIExMTV9TVFJVQ1RVUkVEX09VVFBVVF9NT0RFPWpzb25fb2JqZWN0IGFnYWluc3QgdGhpcyBleGFjdCBtb2RlbC9nYXRld2F5CiAgICAjIHJhdGhlciB0aGFuIGpzb25fc2NoZW1hLiBPdmVycmlkZSB0byAianNvbl9zY2hlbWEiIGZvciBhIHByb3ZpZGVyIHdpdGgKICAgICMgcmVhbCBjb25zdHJhaW5lZCBkZWNvZGluZyAoZS5nLiBEZWVwSW5mcmEvT3BlbkFJLXByb3BlcikuCiAgICBsbG1fc3RydWN0dXJlZF9vdXRwdXRfbW9kZTogc3RyID0gImpzb25fb2JqZWN0IgoKICAgICMgRW1iZWRkaW5nIOKAlCBNVVNUIG1hdGNoIHRoZSBtb2RlbCArIGRpbWVuc2lvbmFsaXR5IHRoZSBtZW0wIHNlZWQgZ3JhcGgKICAgICMgd2FzIGJ1aWx0IHdpdGggKGJnZS1tMywgMTAyNC1kaW0gcGVyIHRoZSBmb3JrIHBsYW4gLyBtZW0wIHJlY29yZHMpLCBvcgogICAgIyB0aGUgY29kZSBncmFwaCdzIHZlY3RvcnMgbGl2ZSBpbiBhIGRpZmZlcmVudCBzcGFjZSBhbmQgZW50aXR5CiAgICAjIHJlc29sdXRpb24vc2VhcmNoIHdpbGwgbmV2ZXIgYWN0dWFsbHkgdW5pZnkgd2l0aCB0aGUgbWVtMCBub2Rlcy4KICAgIGVtYmVkZGluZ19tb2RlbDogc3RyID0gImJnZS1tMyIKICAgIGVtYmVkZGluZ19kaW06IGludCA9IDEwMjQKCiAgICAjIFVuaWZpZWQtZ3JhcGggZ3JvdXBfaWQg4oCUIHNlZSB0aGUgZmFsa29yX2dyYXBoIG5vdGUgYWJvdmU7IGtlZXAgaWRlbnRpY2FsLgogICAgdW5pZmllZF9ncm91cF9pZDogc3RyID0gIm1lbTAtc2VlZC1sb2NhbC12ZXJpZnkiCgogICAgIyBQZXJmb3JtYW5jZSAmIFRpbWluZwogICAgZGVib3VuY2Vfd2luZG93OiBmbG9hdCA9IDAuOAogICAgcG9sbF9pbnRlcnZhbDogZmxvYXQgPSAwLjUKCiAgICAjIFNjaGVkdWxlciBjb25maWd1cmF0aW9uCiAgICBkZWNheV9ob3VyOiBpbnQgPSAyCiAgICBkZWNheV9taW51dGU6IGludCA9IDAKICAgIGRlY2F5X2hvdXJzX3RocmVzaG9sZDogaW50ID0gMjQKCiAgICAjIEdvdmVybmFuY2UtcmVwb3J0IHNjaGVkdWxpbmcgKFBoYXNlIDA0IC8gTkVULTE2KS4gcmVwb3J0X2hvdXIgaXMKICAgICMgZGVsaWJlcmF0ZWx5IG9uZSBob3VyIGFmdGVyIGRlY2F5X2hvdXIgKHJlc2VhcmNoIFBpdGZhbGwgMikgc28gdGhlIHR3bwogICAgIyBqb2JzIGRvbid0IGNvbnRlbmQgZm9yIHRoZSBzYW1lIGdyYXBoLWRhdGFiYXNlIGNvbm5lY3Rpb24gcG9vbC4KICAgIHJlcG9ydF9ob3VyOiBpbnQgPSAzCiAgICByZXBvcnRfbWludXRlOiBpbnQgPSAwCiAgICByZXBvcnRfZGF5X29mX3dlZWs6IHN0ciA9ICJtb24iCiAgICByZXBvcnRfcGVyaW9kX2RheXM6IGludCA9IDcKCiAgICAjIElnbm9yZWQgZGlyZWN0b3JpZXMKICAgIGlnbm9yZWRfcGF0dGVybnM6IExpc3Rbc3RyXSA9IEZpZWxkKGRlZmF1bHRfZmFjdG9yeT1sYW1iZGE6IFsKICAgICAgICAiLmdpdCIsICJfX3B5Y2FjaGVfXyIsICJub2RlX21vZHVsZXMiLCAiLnZlbnYiLCAiZGlzdCIsICJidWlsZCIsICIubWVtZXgiCiAgICBdKQoKICAgIHJlcG9fcm9vdDogc3RyID0gIi4iCiAgICBsb2dfbGV2ZWw6IHN0ciA9ICJJTkZPIgoKICAgICMgSGFybmVzcyBjb25maWd1cmF0aW9ucwogICAgaGFybmVzc2VzOiBEaWN0W3N0ciwgSGFybmVzc0NvbmZpZ10gPSBGaWVsZChkZWZhdWx0X2ZhY3Rvcnk9ZGljdCkKCiAgICAjIFBoYXNlIDcg4oCUIGNvbXBvc2l0ZS1yZXJhbmtlciAvIFJSRiAvIGNvbmZsaWN0LWRldGVjdGlvbiBrbm9icy4KICAgIHJldHJpZXZhbDogUmV0cmlldmFsQ29uZmlnID0gRmllbGQoZGVmYXVsdF9mYWN0b3J5PVJldHJpZXZhbENvbmZpZykKCiAgICBkZWYgaGFybmVzc19jb25maWcoc2VsZiwgaGFybmVzczogT3B0aW9uYWxbc3RyXSkgLT4gSGFybmVzc0NvbmZpZzoKICAgICAgICAiIiJSZXNvbHZlIHRoZSBIYXJuZXNzQ29uZmlnIGZvciBgYGhhcm5lc3NgYCwgZmFsbGluZyBiYWNrIHRvIHRoZQogICAgICAgIGBgZGVmYXVsdGBgIGVudHJ5IGFuZCBmaW5hbGx5IHRvIHRoZSBIYXJuZXNzQ29uZmlnIGRlZmF1bHRzLgoKICAgICAgICBgYGhhcm5lc3NgYCBpcyB0aGUgd3JpdGluZyBjbGllbnQncyBpZGVudGl0eSAoZS5nLiBgYGNsYXVkZS1jb2RlYGAsCiAgICAgICAgYGBnZW1pbmktY2xpYGAsIGBgY29kZXhgYCkgb3IgYGBOb25lYGAvYGAid2F0Y2hlciJgYCBmb3IgdGhlIGNvbW1pdAogICAgICAgIHN5bnRoZXNpc2VyLiBVbmtub3duIGhhcm5lc3NlcyByZXNvbHZlIHRvIGBgZGVmYXVsdGBgIHNvIHRoZSBjb25maWcKICAgICAgICBzdGF5cyBmb3J3YXJkLWNvbXBhdGlibGUgd2l0aCBjbGllbnRzIHdlIGhhdmVuJ3QgbmFtZWQgeWV0LgogICAgICAgICIiIgogICAgICAgIGlmIGhhcm5lc3MgYW5kIGhhcm5lc3MgaW4gc2VsZi5oYXJuZXNzZXM6CiAgICAgICAgICAgIHJldHVybiBzZWxmLmhhcm5lc3Nlc1toYXJuZXNzXQogICAgICAgIGlmICJkZWZhdWx0IiBpbiBzZWxmLmhhcm5lc3NlczoKICAgICAgICAgICAgcmV0dXJuIHNlbGYuaGFybmVzc2VzWyJkZWZhdWx0Il0KICAgICAgICByZXR1cm4gSGFybmVzc0NvbmZpZygpCgogICAgZGVmIGluaXRpYWxfY29uZmlkZW5jZV9mb3Ioc2VsZiwgaGFybmVzczogT3B0aW9uYWxbc3RyXSkgLT4gZmxvYXQ6CiAgICAgICAgIiIiSW5pdGlhbCBgYGJhc2VfY29uZmlkZW5jZWBgIGEgZnJlc2hseS13cml0dGVuIERlY2lzaW9uIHNob3VsZCBjYXJyeSwKICAgICAgICBrZXllZCBieSB0aGUgd3JpdGluZyBoYXJuZXNzIChTaWduYWwgUGlsbGFyIEEpLiBUaGlzIGlzIHRoZSBzaW5nbGUKICAgICAgICBzb3VyY2Ugb2YgdHJ1dGgg4oCUIGFnZW50IHdyaXRlcyBhbmQgY29tbWl0IHN5bnRoZXNpcyBib3RoIHJvdXRlIHRocm91Z2gKICAgICAgICBoZXJlIGluc3RlYWQgb2YgaGFyZGNvZGluZyAwLjYuIiIiCiAgICAgICAgcmV0dXJuIHNlbGYuaGFybmVzc19jb25maWcoaGFybmVzcykuaW5pdGlhbF9kZWNpc2lvbl9jb25maWRlbmNlCgpkZWYgbG9hZF9jb25maWcocmVwb19yb290OiBPcHRpb25hbFtzdHJdID0gTm9uZSkgLT4gQ29uZmlnOgogICAgIiIiCiAgICBMb2FkcyBjb25maWd1cmF0aW9uIGZyb20gZW52aXJvbm1lbnQgdmFyaWFibGVzIGFuZCBvcHRpb25hbGx5IGNvbmZpZy55YW1sLgoKICAgIGBgY29uZmlnLnlhbWxgYCBpcyByZXNvbHZlZCByZWxhdGl2ZSB0byBgYHJlcG9fcm9vdGBgIHdoZW4gcHJvdmlkZWQgKGF1ZGl0CiAgICBCMikg4oCUIHRoZSBNQ1Agc2VydmVyIGlzIHNwYXduZWQgZnJvbSB0aGUgKmNsaWVudCdzKiBDV0QsIG5vdCB0aGUgcHJvamVjdAogICAgcm9vdCwgc28gYSBDV0QtcmVsYXRpdmUgbG9va3VwIHdvdWxkIHNpbGVudGx5IG1pc3MgYGA8cmVwbz4vY29uZmlnLnlhbWxgYAogICAgKG9yIGxvYWQgYSBzdHJheSBvbmUpLiBGYWxscyBiYWNrIHRvIENXRCBmb3IgYmFja3dhcmRzIGNvbXBhdGliaWxpdHkgd2hlbgogICAgbm8gcmVwbyBpcyBnaXZlbi4KICAgICIiIgogICAgIyBCYXNlIGNvbmZpZ3VyYXRpb24gZnJvbSBlbnZpcm9ubWVudCB2YXJpYWJsZXMKICAgIGVudl9jb25maWcgPSB7CiAgICAgICAgImZhbGtvcl9ob3N0Ijogb3MuZ2V0ZW52KCJGQUxLT1JfSE9TVCIpLAogICAgICAgICJmYWxrb3JfcG9ydCI6IG9zLmdldGVudigiRkFMS09SX1BPUlQiKSwKICAgICAgICAiZmFsa29yX2dyYXBoIjogb3MuZ2V0ZW52KCJGQUxLT1JfR1JBUEgiKSwKICAgICAgICAibGl0ZWxsbV9iYXNlX3VybCI6IG9zLmdldGVudigiTElURUxMTV9CQVNFX1VSTCIpLAogICAgICAgICJsaXRlbGxtX2FwaV9rZXkiOiBvcy5nZXRlbnYoIkxJVEVMTE1fQVBJX0tFWSIpLAogICAgICAgICJsaXRlbGxtX21vZGVsIjogb3MuZ2V0ZW52KCJMSVRFTExNX01PREVMIiksCiAgICAgICAgInByb19tb2RlbCI6IG9zLmdldGVudigiUFJPX01PREVMIiksCiAgICAgICAgImxsbV9zdHJ1Y3R1cmVkX291dHB1dF9tb2RlIjogb3MuZ2V0ZW52KCJMTE1fU1RSVUNUVVJFRF9PVVRQVVRfTU9ERSIpLAogICAgICAgICJlbWJlZGRpbmdfbW9kZWwiOiBvcy5nZXRlbnYoIkVNQkVERElOR19NT0RFTCIpLAogICAgICAgICJlbWJlZGRpbmdfZGltIjogb3MuZ2V0ZW52KCJFTUJFRERJTkdfRElNIiksCiAgICAgICAgInVuaWZpZWRfZ3JvdXBfaWQiOiBvcy5nZXRlbnYoIlVOSUZJRURfR1JPVVBfSUQiKSwKICAgICAgICAiZGVib3VuY2Vfd2luZG93Ijogb3MuZ2V0ZW52KCJERUJPVU5DRV9XSU5ET1ciKSwKICAgICAgICAicG9sbF9pbnRlcnZhbCI6IG9zLmdldGVudigiUE9MTF9JTlRFUlZBTCIpLAogICAgICAgICJkZWNheV9ob3VyIjogb3MuZ2V0ZW52KCJERUNBWV9IT1VSIiksCiAgICAgICAgImRlY2F5X21pbnV0ZSI6IG9zLmdldGVudigiREVDQVlfTUlOVVRFIiksCiAgICAgICAgImRlY2F5X2hvdXJzX3RocmVzaG9sZCI6IG9zLmdldGVudigiREVDQVlfSE9VUlNfVEhSRVNIT0xEIiksCiAgICAgICAgInJlcG9ydF9ob3VyIjogb3MuZ2V0ZW52KCJSRVBPUlRfSE9VUiIpLAogICAgICAgICJyZXBvcnRfbWludXRlIjogb3MuZ2V0ZW52KCJSRVBPUlRfTUlOVVRFIiksCiAgICAgICAgInJlcG9ydF9kYXlfb2Zfd2VlayI6IG9zLmdldGVudigiUkVQT1JUX0RBWV9PRl9XRUVLIiksCiAgICAgICAgInJlcG9ydF9wZXJpb2RfZGF5cyI6IG9zLmdldGVudigiUkVQT1JUX1BFUklPRF9EQVlTIiksCiAgICAgICAgImxvZ19sZXZlbCI6IG9zLmdldGVudigiR1JBUEhJVElfTE9HX0xFVkVMIiksCiAgICB9CgogICAgaWdub3JlZCA9IG9zLmdldGVudigiTUVNRVhfSUdOT1JFRF9QQVRURVJOUyIpCiAgICBpZiBpZ25vcmVkOgogICAgICAgIGVudl9jb25maWdbImlnbm9yZWRfcGF0dGVybnMiXSA9IGlnbm9yZWQuc3BsaXQoIiwiKQoKICAgICMgUmVtb3ZlIE5vbmUgdmFsdWVzIHRvIGFsbG93IFB5ZGFudGljIGRlZmF1bHRzIG9yIFlBTUwgb3ZlcnJpZGVzCiAgICBjb25maWdfZGljdCA9IHtrOiB2IGZvciBrLCB2IGluIGVudl9jb25maWcuaXRlbXMoKSBpZiB2IGlzIG5vdCBOb25lfQoKICAgICMgQ29udmVydCBudW1lcmljIHN0cmluZ3MgZnJvbSBlbnYgdG8gY29ycmVjdCB0eXBlcyBmb3IgbWVyZ2luZwogICAgaWYgImZhbGtvcl9wb3J0IiBpbiBjb25maWdfZGljdDogY29uZmlnX2RpY3RbImZhbGtvcl9wb3J0Il0gPSBpbnQoY29uZmlnX2RpY3RbImZhbGtvcl9wb3J0Il0pCiAgICBpZiAiZW1iZWRkaW5nX2RpbSIgaW4gY29uZmlnX2RpY3Q6IGNvbmZpZ19kaWN0WyJlbWJlZGRpbmdfZGltIl0gPSBpbnQoY29uZmlnX2RpY3RbImVtYmVkZGluZ19kaW0iXSkKICAgIGlmICJkZWJvdW5jZV93aW5kb3ciIGluIGNvbmZpZ19kaWN0OiBjb25maWdfZGljdFsiZGVib3VuY2Vfd2luZG93Il0gPSBmbG9hdChjb25maWdfZGljdFsiZGVib3VuY2Vfd2luZG93Il0pCiAgICBpZiAicG9sbF9pbnRlcnZhbCIgaW4gY29uZmlnX2RpY3Q6IGNvbmZpZ19kaWN0WyJwb2xsX2ludGVydmFsIl0gPSBmbG9hdChjb25maWdfZGljdFsicG9sbF9pbnRlcnZhbCJdKQogICAgaWYgImRlY2F5X2hvdXIiIGluIGNvbmZpZ19kaWN0OiBjb25maWdfZGljdFsiZGVjYXlfaG91ciJdID0gaW50KGNvbmZpZ19kaWN0WyJkZWNheV9ob3VyIl0pCiAgICBpZiAiZGVjYXlfbWludXRlIiBpbiBjb25maWdfZGljdDogY29uZmlnX2RpY3RbImRlY2F5X21pbnV0ZSJdID0gaW50KGNvbmZpZ19kaWN0WyJkZWNheV9taW51dGUiXSkKICAgIGlmICJkZWNheV9ob3Vyc190aHJlc2hvbGQiIGluIGNvbmZpZ19kaWN0OiBjb25maWdfZGljdFsiZGVjYXlfaG91cnNfdGhyZXNob2xkIl0gPSBpbnQoY29uZmlnX2RpY3RbImRlY2F5X2hvdXJzX3RocmVzaG9sZCJdKQogICAgaWYgInJlcG9ydF9ob3VyIiBpbiBjb25maWdfZGljdDogY29uZmlnX2RpY3RbInJlcG9ydF9ob3VyIl0gPSBpbnQoY29uZmlnX2RpY3RbInJlcG9ydF9ob3VyIl0pCiAgICBpZiAicmVwb3J0X21pbnV0ZSIgaW4gY29uZmlnX2RpY3Q6IGNvbmZpZ19kaWN0WyJyZXBvcnRfbWludXRlIl0gPSBpbnQoY29uZmlnX2RpY3RbInJlcG9ydF9taW51dGUiXSkKICAgIGlmICJyZXBvcnRfcGVyaW9kX2RheXMiIGluIGNvbmZpZ19kaWN0OiBjb25maWdfZGljdFsicmVwb3J0X3BlcmlvZF9kYXlzIl0gPSBpbnQoY29uZmlnX2RpY3RbInJlcG9ydF9wZXJpb2RfZGF5cyJdKQoKICAgICMgTG9hZCBmcm9tIGNvbmZpZy55YW1sIGlmIGl0IGV4aXN0cyAocmVsYXRpdmUgdG8gcmVwb19yb290IHdoZW4ga25vd24pLgogICAgY29uZmlnX2Jhc2UgPSByZXBvX3Jvb3QgaWYgcmVwb19yb290IGVsc2Ugb3MuZ2V0Y3dkKCkKICAgIGNvbmZpZ195YW1sX3BhdGggPSBvcy5wYXRoLmpvaW4oY29uZmlnX2Jhc2UsICJjb25maWcueWFtbCIpCiAgICBpZiBvcy5wYXRoLmV4aXN0cyhjb25maWdfeWFtbF9wYXRoKToKICAgICAgICB3aXRoIG9wZW4oY29uZmlnX3lhbWxfcGF0aCwgInIiKSBhcyBmOgogICAgICAgICAgICB5YW1sX2RhdGEgPSB5YW1sLnNhZmVfbG9hZChmKQogICAgICAgICAgICBpZiB5YW1sX2RhdGE6CiAgICAgICAgICAgICAgICBjb25maWdfZGljdC51cGRhdGUoeWFtbF9kYXRhKQoKICAgIHRyeToKICAgICAgICByZXR1cm4gQ29uZmlnKCoqY29uZmlnX2RpY3QpCiAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgIyBSZS1yYWlzZSB3aXRoIGEgbW9yZSBoZWxwZnVsIG1lc3NhZ2UgaWYgcmVxdWlyZWQgZmllbGRzIGFyZSBtaXNzaW5nLgogICAgICAgIHJlcXVpcmVkX3ZhcnMgPSBbIkZBTEtPUl9IT1NUIiwgIkxJVEVMTE1fQkFTRV9VUkwiLCAiTElURUxMTV9BUElfS0VZIiwgIkxJVEVMTE1fTU9ERUwiXQogICAgICAgIG1pc3NpbmcgPSBbdiBmb3IgdiBpbiByZXF1aXJlZF92YXJzIGlmIHYubG93ZXIoKSBub3QgaW4gY29uZmlnX2RpY3RdCiAgICAgICAgaWYgbWlzc2luZzoKICAgICAgICAgICAgIyBJbnRyb3NwZWN0aW9uLW9ubHkgbW9kZTogYWxsb3cgdGhlIHNlcnZlciB0byBzdGFydCB3aXRob3V0IGEgbGl2ZQogICAgICAgICAgICAjIGJhY2tlbmQgc28gTUNQIGNsaWVudHMgKGFuZCBkaXJlY3Rvcnkgc2FuZGJveGVzIGxpa2UgZ2xhbWEuYWkpIGNhbgogICAgICAgICAgICAjIGVudW1lcmF0ZSB0b29scy4gVG9vbCBjYWxscyB0aGVtc2VsdmVzIHdpbGwgc3RpbGwgZmFpbCBsb3VkbHkuCiAgICAgICAgICAgIGlmIG9zLmdldGVudigiTUVNRVhfSU5UUk9TUEVDVElPTl9PTkxZIikgPT0gIjEiOgogICAgICAgICAgICAgICAgcGxhY2Vob2xkZXJzID0gewogICAgICAgICAgICAgICAgICAgICJmYWxrb3JfaG9zdCI6ICJpbnRyb3NwZWN0aW9uLW9ubHkiLAogICAgICAgICAgICAgICAgICAgICJsaXRlbGxtX2Jhc2VfdXJsIjogImh0dHA6Ly9pbnRyb3NwZWN0aW9uLW9ubHk6NDAwMCIsCiAgICAgICAgICAgICAgICAgICAgImxpdGVsbG1fYXBpX2tleSI6ICJpbnRyb3NwZWN0aW9uLW9ubHkiLAogICAgICAgICAgICAgICAgICAgICJsaXRlbGxtX21vZGVsIjogImludHJvc3BlY3Rpb24tb25seSIsCiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICBmb3IgaywgdiBpbiBwbGFjZWhvbGRlcnMuaXRlbXMoKToKICAgICAgICAgICAgICAgICAgICBjb25maWdfZGljdC5zZXRkZWZhdWx0KGssIHYpCiAgICAgICAgICAgICAgICByZXR1cm4gQ29uZmlnKCoqY29uZmlnX2RpY3QpCiAgICAgICAgICAgIHJhaXNlIFZhbHVlRXJyb3IoCiAgICAgICAgICAgICAgICBmIk1pc3NpbmcgcmVxdWlyZWQgY29uZmlndXJhdGlvbjogeycsICcuam9pbihtaXNzaW5nKX0uICIKICAgICAgICAgICAgICAgICJTZXQgdGhlc2UgYXMgZW52aXJvbm1lbnQgdmFyaWFibGVzLCBvciBwbGFjZSB0aGVtIGluIGEgLmVudiBmaWxlIGF0ICIKICAgICAgICAgICAgICAgICI8cmVwbz4vLmVudiAoYXV0by1sb2FkZWQgYnkgYG1lbWV4IHNlcnZlIC0tcmVwbyA8cGF0aD5gKSwgb3IgcGFzcyAiCiAgICAgICAgICAgICAgICAiYG1lbWV4IHNlcnZlIC0tZW52LWZpbGUgPHBhdGgvdG8vLmVudj5gLiIKICAgICAgICAgICAgKQogICAgICAgIHJhaXNlIGUKCiMgU2luZ2xldG9uIGluc3RhbmNlIGZvciB0aGUgYXBwbGljYXRpb24KX2NvbmZpZzogT3B0aW9uYWxbQ29uZmlnXSA9IE5vbmUKCmRlZiBnZXRfY29uZmlnKCkgLT4gQ29uZmlnOgogICAgZ2xvYmFsIF9jb25maWcKICAgIGlmIF9jb25maWcgaXMgTm9uZToKICAgICAgICBfY29uZmlnID0gbG9hZF9jb25maWcoKQogICAgcmV0dXJuIF9jb25maWcK
+import os
+import re
+import subprocess
+import yaml
+from pathlib import Path
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict
+from urllib.parse import urlparse
+from dotenv import load_dotenv
+
+# Load .env file if it exists
+load_dotenv()
+
+
+# SCP-shorthand git remote form: `[user@]host:path` (e.g. `git@github.com:org/repo.git`).
+# Verified against pip's own VCS URL normalizer (pip/_internal/vcs/git.py) — see
+# 00-RESEARCH.md Pattern 2.
+_SCP_LIKE = re.compile(r"^(?:(?P<user>[\w.-]+)@)?(?P<host>[^/:]+):(?P<path>[\w.-][^:]*)$")
+
+
+def normalize_git_remote_url(url: Optional[str]) -> Optional[str]:
+    """Normalize a git remote URL (SSH, HTTPS, SCP-shorthand, or self-hosted
+    with a custom port) into one canonical ``host/path`` string so two
+    clones of the same repo converge on the same ``project_id`` (NET-01).
+
+    Never raises. Returns ``None`` for falsy input, unrecognized forms, or
+    a local bare-repo path (Pitfall 1 — a Windows/POSIX filesystem path can
+    superficially match the SCP-shorthand regex, so `os.path.exists()` is
+    checked FIRST, exactly matching pip's own ordering). Only the hostname
+    is lower-cased; the path case is preserved (Pitfall 5 / Assumption A1).
+    """
+    if not url:
+        return None
+    url = url.strip()
+    if not url:
+        return None
+
+    # Guard FIRST: a local bare-repo path (e.g. Windows "C:\\repos\\shared.git")
+    # can superficially match the SCP-shorthand regex below because a
+    # single-letter drive "host" precedes a colon. Check filesystem
+    # existence before attempting the regex (Pitfall 1).
+    if os.path.exists(url):
+        return None
+
+    if not re.match(r"^\w+://", url):
+        m = _SCP_LIKE.match(url)
+        if m:
+            url = f"ssh://{m.group('host')}/{m.group('path')}"
+        else:
+            return None  # unrecognized form — caller falls back
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return None
+    path = parsed.path.strip("/")
+    if path.lower().endswith(".git"):
+        path = path[: -len(".git")]
+    if not host or not path:
+        return None
+    return f"{host}/{path}"
+
+
+def _get_git_remote_url(repo_path: str) -> Optional[str]:
+    """Run `git remote get-url origin` in ``repo_path``. Never raises —
+    returns ``None`` on any failure (no remote, no git, timeout, etc.),
+    matching the existing convention in
+    `memex/watcher/git_hook.py::emit_commit_event` (Pitfall 4)."""
+    try:
+        output = subprocess.check_output(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo_path,
+            stderr=subprocess.DEVNULL,
+        )
+        text = output.decode().strip()
+        return text or None
+    except Exception:
+        return None
+
+
+def resolve_project_id(repo_path: str) -> Optional[str]:
+    """Resolve a path-independent ``project_id`` scoping key for ``repo_path``,
+    per the locked resolution order (NET-01): (1) normalized git remote
+    identity — most authoritative, shared across the team; (2) else the
+    contents of ``<repo_path>/.memex/project_id`` (written by
+    `memex init --project-id <id>`); (3) else ``None`` (unchanged single-dev
+    behavior — callers fall back to `canonical_repo_path()` themselves; the
+    two resolvers stay orthogonal per 00-RESEARCH.md Pattern 1).
+
+    Never raises regardless of git/filesystem state.
+    """
+    remote = _get_git_remote_url(repo_path)
+    if remote:
+        normalized = normalize_git_remote_url(remote)
+        if normalized:
+            return normalized
+
+    try:
+        project_file = Path(repo_path) / ".memex" / "project_id"
+        if project_file.exists():
+            text = project_file.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    except Exception:
+        pass
+
+    return None
+
+
+def canonical_repo_path(p: Optional[str]) -> Optional[str]:
+    """Canonicalize a repo path so the watcher (write) and MCP server (read)
+    always produce the byte-identical `repo_path` join key (audit B1).
+
+    Collapses `.`/`..`/trailing separators and symlinks via ``resolve()``,
+    emits POSIX separators, and case-folds on Windows (case-insensitive FS).
+    Idempotent. Passes through ``None``/empty unchanged so callers don't have
+    to special-case them.
+    """
+    if not p:
+        return p
+    try:
+        resolved = Path(p).resolve()
+    except Exception:
+        resolved = Path(p)
+    s = resolved.as_posix()
+    if os.name == "nt":
+        s = s.lower()
+    return s
+
+class HarnessConfig(BaseModel):
+    initial_decision_confidence: float = 0.6
+    corroboration_window_days: int = 14
+
+
+# Phase 7 — Retrieval composite-reranker config (ARCHITECTURE-v0.3.0 §8).
+# Defaults mirror the module constants in ``memex.mcp_server.reranker`` so
+# explicit config and module-default behaviour stay in sync.
+class RetrievalConfig(BaseModel):
+    recency_tau_days: int = 90                # τ — exponential decay (days)
+    conf_floor: float = 0.5                   # confidence factor floor
+    rehearsal_weight: float = 0.1             # access_count log coefficient
+    rrf_k: int = 60                           # RRF constant for cross-modality merge
+    conflict_similarity_threshold: float = 0.4  # below this + overlapping validity = conflict (Phase 7)
+    contradiction_similarity_threshold: float = 0.85  # MCP-write intent-confirmation threshold (Phase 9)
+
+
+class Config(BaseModel):
+    # --- FalkorDB backend (replaces Neo4j — v0.7.0 fork: falkordb-litellm) ---
+    falkor_host: str
+    falkor_port: int = 6379
+    # 🚨 This value doubles as the Graphiti `group_id` partition threaded
+    # through every `add_episode()` call (see graph/writer.py). graphiti-core
+    # 0.29.x's `Graphiti.add_episode()` treats an explicit `group_id` as the
+    # *physical* FalkorDB database name whenever it differs from the driver's
+    # already-configured database — it calls `self.driver.clone(database=
+    # group_id)` and swaps the singleton's driver out from under it
+    # (graphiti_core/graphiti.py). `falkor_graph` and `unified_group_id` MUST
+    # always be set to the exact same string, or writes will silently
+    # fragment across two different physical graphs.
+    falkor_graph: str = "mem0-seed-local-verify"
+
+    # --- LiteLLM gateway (OpenAI-compatible) — replaces direct Gemini calls ---
+    litellm_base_url: str
+    litellm_api_key: str
+    litellm_model: str
+    # Phase 9 — grounded-synthesis model used by explain_change (previously
+    # Gemini Pro). Defaults to the same extraction model as litellm_model;
+    # override at deploy time for a stronger model if the gateway exposes one.
+    pro_model: str = "mem0-extract-35b"
+
+    # graphiti_core.llm_client.openai_generic_client.OpenAIGenericClient's
+    # structured-output mode ("json_schema" native constrained decoding, or
+    # "json_object" with the schema embedded in-prompt and validated
+    # client-side). Defaults to "json_object" because that is what this
+    # fork's default litellm_model (qwen3.5-35b, served locally via
+    # llama-swap on the .133 R9700) actually needs -- the same reason our
+    # production graphiti-mcp deployment runs
+    # LLM_STRUCTURED_OUTPUT_MODE=json_object against this exact model/gateway
+    # rather than json_schema. Override to "json_schema" for a provider with
+    # real constrained decoding (e.g. DeepInfra/OpenAI-proper).
+    llm_structured_output_mode: str = "json_object"
+
+    # Embedding — MUST match the model + dimensionality the mem0 seed graph
+    # was built with (bge-m3, 1024-dim per the fork plan / mem0 records), or
+    # the code graph's vectors live in a different space and entity
+    # resolution/search will never actually unify with the mem0 nodes.
+    embedding_model: str = "bge-m3"
+    embedding_dim: int = 1024
+
+    # Unified-graph group_id — see the falkor_graph note above; keep identical.
+    unified_group_id: str = "mem0-seed-local-verify"
+
+    # Performance & Timing
+    debounce_window: float = 0.8
+    poll_interval: float = 0.5
+
+    # Scheduler configuration
+    decay_hour: int = 2
+    decay_minute: int = 0
+    decay_hours_threshold: int = 24
+
+    # Governance-report scheduling (Phase 04 / NET-16). report_hour is
+    # deliberately one hour after decay_hour (research Pitfall 2) so the two
+    # jobs don't contend for the same graph-database connection pool.
+    report_hour: int = 3
+    report_minute: int = 0
+    report_day_of_week: str = "mon"
+    report_period_days: int = 7
+
+    # Ignored directories
+    ignored_patterns: List[str] = Field(default_factory=lambda: [
+        ".git", "__pycache__", "node_modules", ".venv", "dist", "build", ".memex"
+    ])
+
+    repo_root: str = "."
+    log_level: str = "INFO"
+
+    # Harness configurations
+    harnesses: Dict[str, HarnessConfig] = Field(default_factory=dict)
+
+    # Phase 7 — composite-reranker / RRF / conflict-detection knobs.
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+
+    def harness_config(self, harness: Optional[str]) -> HarnessConfig:
+        """Resolve the HarnessConfig for ``harness``, falling back to the
+        ``default`` entry and finally to the HarnessConfig defaults.
+
+        ``harness`` is the writing client's identity (e.g. ``claude-code``,
+        ``gemini-cli``, ``codex``) or ``None``/``"watcher"`` for the commit
+        synthesiser. Unknown harnesses resolve to ``default`` so the config
+        stays forward-compatible with clients we haven't named yet.
+        """
+        if harness and harness in self.harnesses:
+            return self.harnesses[harness]
+        if "default" in self.harnesses:
+            return self.harnesses["default"]
+        return HarnessConfig()
+
+    def initial_confidence_for(self, harness: Optional[str]) -> float:
+        """Initial ``base_confidence`` a freshly-written Decision should carry,
+        keyed by the writing harness (Signal Pillar A). This is the single
+        source of truth — agent writes and commit synthesis both route through
+        here instead of hardcoding 0.6."""
+        return self.harness_config(harness).initial_decision_confidence
+
+def load_config(repo_root: Optional[str] = None) -> Config:
+    """
+    Loads configuration from environment variables and optionally config.yaml.
+
+    ``config.yaml`` is resolved relative to ``repo_root`` when provided (audit
+    B2) — the MCP server is spawned from the *client's* CWD, not the project
+    root, so a CWD-relative lookup would silently miss ``<repo>/config.yaml``
+    (or load a stray one). Falls back to CWD for backwards compatibility when
+    no repo is given.
+    """
+    # Base configuration from environment variables
+    env_config = {
+        "falkor_host": os.getenv("FALKOR_HOST"),
+        "falkor_port": os.getenv("FALKOR_PORT"),
+        "falkor_graph": os.getenv("FALKOR_GRAPH"),
+        "litellm_base_url": os.getenv("LITELLM_BASE_URL"),
+        "litellm_api_key": os.getenv("LITELLM_API_KEY"),
+        "litellm_model": os.getenv("LITELLM_MODEL"),
+        "pro_model": os.getenv("PRO_MODEL"),
+        "llm_structured_output_mode": os.getenv("LLM_STRUCTURED_OUTPUT_MODE"),
+        "embedding_model": os.getenv("EMBEDDING_MODEL"),
+        "embedding_dim": os.getenv("EMBEDDING_DIM"),
+        "unified_group_id": os.getenv("UNIFIED_GROUP_ID"),
+        "debounce_window": os.getenv("DEBOUNCE_WINDOW"),
+        "poll_interval": os.getenv("POLL_INTERVAL"),
+        "decay_hour": os.getenv("DECAY_HOUR"),
+        "decay_minute": os.getenv("DECAY_MINUTE"),
+        "decay_hours_threshold": os.getenv("DECAY_HOURS_THRESHOLD"),
+        "report_hour": os.getenv("REPORT_HOUR"),
+        "report_minute": os.getenv("REPORT_MINUTE"),
+        "report_day_of_week": os.getenv("REPORT_DAY_OF_WEEK"),
+        "report_period_days": os.getenv("REPORT_PERIOD_DAYS"),
+        "log_level": os.getenv("GRAPHITI_LOG_LEVEL"),
+    }
+
+    ignored = os.getenv("MEMEX_IGNORED_PATTERNS")
+    if ignored:
+        env_config["ignored_patterns"] = ignored.split(",")
+
+    # Remove None values to allow Pydantic defaults or YAML overrides
+    config_dict = {k: v for k, v in env_config.items() if v is not None}
+
+    # Convert numeric strings from env to correct types for merging
+    if "falkor_port" in config_dict: config_dict["falkor_port"] = int(config_dict["falkor_port"])
+    if "embedding_dim" in config_dict: config_dict["embedding_dim"] = int(config_dict["embedding_dim"])
+    if "debounce_window" in config_dict: config_dict["debounce_window"] = float(config_dict["debounce_window"])
+    if "poll_interval" in config_dict: config_dict["poll_interval"] = float(config_dict["poll_interval"])
+    if "decay_hour" in config_dict: config_dict["decay_hour"] = int(config_dict["decay_hour"])
+    if "decay_minute" in config_dict: config_dict["decay_minute"] = int(config_dict["decay_minute"])
+    if "decay_hours_threshold" in config_dict: config_dict["decay_hours_threshold"] = int(config_dict["decay_hours_threshold"])
+    if "report_hour" in config_dict: config_dict["report_hour"] = int(config_dict["report_hour"])
+    if "report_minute" in config_dict: config_dict["report_minute"] = int(config_dict["report_minute"])
+    if "report_period_days" in config_dict: config_dict["report_period_days"] = int(config_dict["report_period_days"])
+
+    # Load from config.yaml if it exists (relative to repo_root when known).
+    config_base = repo_root if repo_root else os.getcwd()
+    config_yaml_path = os.path.join(config_base, "config.yaml")
+    if os.path.exists(config_yaml_path):
+        with open(config_yaml_path, "r") as f:
+            yaml_data = yaml.safe_load(f)
+            if yaml_data:
+                config_dict.update(yaml_data)
+
+    try:
+        return Config(**config_dict)
+    except Exception as e:
+        # Re-raise with a more helpful message if required fields are missing.
+        required_vars = ["FALKOR_HOST", "LITELLM_BASE_URL", "LITELLM_API_KEY", "LITELLM_MODEL"]
+        missing = [v for v in required_vars if v.lower() not in config_dict]
+        if missing:
+            # Introspection-only mode: allow the server to start without a live
+            # backend so MCP clients (and directory sandboxes like glama.ai) can
+            # enumerate tools. Tool calls themselves will still fail loudly.
+            if os.getenv("MEMEX_INTROSPECTION_ONLY") == "1":
+                placeholders = {
+                    "falkor_host": "introspection-only",
+                    "litellm_base_url": "http://introspection-only:4000",
+                    "litellm_api_key": "introspection-only",
+                    "litellm_model": "introspection-only",
+                }
+                for k, v in placeholders.items():
+                    config_dict.setdefault(k, v)
+                return Config(**config_dict)
+            raise ValueError(
+                f"Missing required configuration: {', '.join(missing)}. "
+                "Set these as environment variables, or place them in a .env file at "
+                "<repo>/.env (auto-loaded by `memex serve --repo <path>`), or pass "
+                "`memex serve --env-file <path/to/.env>`."
+            )
+        raise e
+
+# Singleton instance for the application
+_config: Optional[Config] = None
+
+def get_config() -> Config:
+    global _config
+    if _config is None:
+        _config = load_config()
+    return _config
