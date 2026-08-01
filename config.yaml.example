@@ -8,10 +8,12 @@ falkor_graph: mem0-seed-local-verify
 # LiteLLM gateway Configuration (OpenAI-compatible — replaces direct Gemini)
 litellm_base_url: http://litellm.llm-gateway.svc.cluster.local:4000
 litellm_api_key: your_litellm_key_here
-litellm_model: mem0-extract-35b
-# Grounded-synthesis model used by explain_change. Defaults to the same
-# extraction model; override with a stronger gateway model if available.
-pro_model: mem0-extract-35b
+# LOCAL-ONLY: qwen3.5-35b routes to llama-swap on 192.168.1.133 (the local R9700),
+# NOT DeepInfra. Do NOT use mem0-extract-35b / any *-deepinfra alias here — those
+# leave the box and cost per-token. This lowercase alias has no DeepInfra spill twin.
+litellm_model: qwen3.5-35b
+# Grounded-synthesis model used by explain_change. Local, same as above.
+pro_model: qwen3.5-35b
 
 # Embedding — MUST match the model + dims the mem0 seed graph was built
 # with, or vectors live in a different space and won't unify.
