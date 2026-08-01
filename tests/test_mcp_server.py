@@ -53,7 +53,7 @@ async def test_introspection_only_mode_skips_neo4j(monkeypatch):
     # MCP directory sandboxes (glama.ai) run the server with no backend.
     # MEMEX_INTROSPECTION_ONLY=1 must let create_server boot so list_tools works.
     monkeypatch.setenv("MEMEX_INTROSPECTION_ONLY", "1")
-    for var in ("NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD", "GEMINI_API_KEY"):
+    for var in ("FALKOR_HOST", "LITELLM_BASE_URL", "LITELLM_API_KEY", "LITELLM_MODEL"):
         monkeypatch.delenv(var, raising=False)
 
     # Reset the cached config singleton so our env-var changes take effect.

@@ -1,7 +1,7 @@
 """Unit tests for ``memex.graph.cluster_summary``.
 
 Tests for synthesize_cluster_summary() and refresh_cluster_summaries()
-without requiring live Neo4j, Gemini or network access.
+without requiring a live FalkorDB, LiteLLM gateway or network access.
 """
 
 from __future__ import annotations
@@ -15,17 +15,30 @@ from memex.graph.cluster_summary import (
 )
 
 
+def _mock_completion(text: str):
+    message = MagicMock()
+    message.content = text
+    choice = MagicMock()
+    choice.message = message
+    response = MagicMock()
+    response.choices = [choice]
+    return response
+
+
 @pytest.mark.asyncio
 async def test_synthesize_returns_single_sentence():
-    # Mock Gemini Client
     mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.text = "This is a single sentence summary of the cluster."
-    mock_client.models.generate_content.return_value = mock_response
+    mock_client.chat.completions.create = AsyncMock(
+        return_value=_mock_completion("This is a single sentence summary of the cluster.")
+    )
 
-    with patch("google.genai.Client", return_value=mock_client), \
-         patch("memex.config.get_config") as mock_get_config:
-        mock_get_config.return_value = SimpleNamespace(gemini_api_key="fake_key")
+    with patch("memex.graph.cluster_summary.openai.AsyncOpenAI", return_value=mock_client), \
+         patch("memex.graph.cluster_summary.get_config") as mock_get_config:
+        mock_get_config.return_value = SimpleNamespace(
+            litellm_base_url="http://localhost:4000",
+            litellm_api_key="fake_key",
+            litellm_model="test-model",
+        )
 
         summary = await synthesize_cluster_summary(
             cluster_name="test-cluster",
@@ -38,15 +51,18 @@ async def test_synthesize_returns_single_sentence():
 
 @pytest.mark.asyncio
 async def test_synthesize_truncates_decisions():
-    # Mock Gemini Client
     mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.text = "Summary sentence."
-    mock_client.models.generate_content.return_value = mock_response
+    mock_client.chat.completions.create = AsyncMock(
+        return_value=_mock_completion("Summary sentence.")
+    )
 
-    with patch("google.genai.Client", return_value=mock_client), \
-         patch("memex.config.get_config") as mock_get_config:
-        mock_get_config.return_value = SimpleNamespace(gemini_api_key="fake_key")
+    with patch("memex.graph.cluster_summary.openai.AsyncOpenAI", return_value=mock_client), \
+         patch("memex.graph.cluster_summary.get_config") as mock_get_config:
+        mock_get_config.return_value = SimpleNamespace(
+            litellm_base_url="http://localhost:4000",
+            litellm_api_key="fake_key",
+            litellm_model="test-model",
+        )
 
         # Pass 25 decisions, limit to max_decisions=5
         decisions = [f"Decision {i}" for i in range(25)]
@@ -57,9 +73,10 @@ async def test_synthesize_truncates_decisions():
             max_decisions=5
         )
 
-        # Inspect prompt passed to generate_content
-        call_args = mock_client.models.generate_content.call_args
-        prompt = call_args[1]["contents"] if call_args else ""
+        # Inspect prompt passed to chat.completions.create
+        call_args = mock_client.chat.completions.create.call_args
+        messages = call_args[1]["messages"] if call_args else []
+        prompt = messages[0]["content"] if messages else ""
         assert "Decision 0" in prompt
         assert "Decision 4" in prompt
         assert "Decision 5" not in prompt
@@ -82,16 +99,20 @@ async def test_refresh_skips_existing_summaries():
     mock_result.records = [mock_record]
     mock_driver.execute_query.return_value = mock_result
 
-    # Mock Gemini Client
-    mock_gemini = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.text = "Summary 1"
-    mock_gemini.models.generate_content.return_value = mock_resp
+    mock_openai_client = MagicMock()
+    mock_openai_client.chat.completions.create = AsyncMock(
+        return_value=_mock_completion("Summary 1")
+    )
 
     with patch("memex.graph.client.get_graph_client", return_value=mock_client), \
-         patch("google.genai.Client", return_value=mock_gemini), \
-         patch("memex.config.get_config") as mock_get_config:
-        mock_get_config.return_value = SimpleNamespace(gemini_api_key="fake_key", repo_root="/fake")
+         patch("memex.graph.cluster_summary.openai.AsyncOpenAI", return_value=mock_openai_client), \
+         patch("memex.graph.cluster_summary.get_config") as mock_get_config:
+        mock_get_config.return_value = SimpleNamespace(
+            litellm_base_url="http://localhost:4000",
+            litellm_api_key="fake_key",
+            litellm_model="test-model",
+            repo_root="/fake",
+        )
 
         res = await refresh_cluster_summaries("/fake", force=False)
         assert res == {"cluster-1": "Summary 1"}
@@ -119,16 +140,20 @@ async def test_refresh_force_regenerates_all():
     mock_result.records = [mock_record]
     mock_driver.execute_query.return_value = mock_result
 
-    # Mock Gemini Client
-    mock_gemini = MagicMock()
-    mock_resp = MagicMock()
-    mock_resp.text = "Summary 1"
-    mock_gemini.models.generate_content.return_value = mock_resp
+    mock_openai_client = MagicMock()
+    mock_openai_client.chat.completions.create = AsyncMock(
+        return_value=_mock_completion("Summary 1")
+    )
 
     with patch("memex.graph.client.get_graph_client", return_value=mock_client), \
-         patch("google.genai.Client", return_value=mock_gemini), \
-         patch("memex.config.get_config") as mock_get_config:
-        mock_get_config.return_value = SimpleNamespace(gemini_api_key="fake_key", repo_root="/fake")
+         patch("memex.graph.cluster_summary.openai.AsyncOpenAI", return_value=mock_openai_client), \
+         patch("memex.graph.cluster_summary.get_config") as mock_get_config:
+        mock_get_config.return_value = SimpleNamespace(
+            litellm_base_url="http://localhost:4000",
+            litellm_api_key="fake_key",
+            litellm_model="test-model",
+            repo_root="/fake",
+        )
 
         res = await refresh_cluster_summaries("/fake", force=True)
         assert res == {"cluster-1": "Summary 1"}

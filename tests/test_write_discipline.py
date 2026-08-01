@@ -242,7 +242,7 @@ def test_initial_confidence_for_resolves_by_harness():
     from memex.config import Config, HarnessConfig
 
     cfg = Config(
-        neo4j_uri="x", neo4j_user="x", neo4j_password="x", gemini_api_key="x",
+        falkor_host="x", litellm_base_url="x", litellm_api_key="x", litellm_model="x",
         harnesses={
             "claude-code": HarnessConfig(initial_decision_confidence=0.7),
             "default": HarnessConfig(initial_decision_confidence=0.6),
@@ -254,7 +254,7 @@ def test_initial_confidence_for_resolves_by_harness():
 
     # No harness config at all -> HarnessConfig field default, never an
     # implicit 1.0.
-    bare = Config(neo4j_uri="x", neo4j_user="x", neo4j_password="x", gemini_api_key="x")
+    bare = Config(falkor_host="x", litellm_base_url="x", litellm_api_key="x", litellm_model="x")
     assert bare.initial_confidence_for("anything") == 0.6
 
 

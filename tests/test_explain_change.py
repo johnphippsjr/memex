@@ -1,6 +1,7 @@
 """Phase 9 — explain_change MCP tool tests."""
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from memex.mcp_server.tools_explain import explain_change
@@ -45,41 +46,48 @@ async def test_explain_change_returns_grounded_response():
 
 
 @pytest.mark.asyncio
-async def test_explain_change_uses_gemini_pro_not_flash():
-    """Inspect the model id passed to genai. Must contain 'pro' (or match
-    the config's pro_model field) — never 'flash'."""
+async def test_explain_change_uses_pro_model_not_default():
+    """Inspect the model id passed to the gateway client. Must be
+    config.pro_model (the dedicated grounded-synthesis model) — never the
+    default litellm_model used for extraction elsewhere."""
     captured: dict = {}
 
-    fake_response = MagicMock()
-    fake_response.text = "synthesis ok"
-
-    def fake_generate_content(*args, **kwargs):
+    async def fake_create(*args, **kwargs):
         captured["model"] = kwargs.get("model")
-        return fake_response
+        message = MagicMock()
+        message.content = "synthesis ok"
+        choice = MagicMock()
+        choice.message = message
+        response = MagicMock()
+        response.choices = [choice]
+        return response
 
     fake_client = MagicMock()
-    fake_client.models.generate_content = fake_generate_content
-
-    fake_genai_module = MagicMock()
-    fake_genai_module.Client.return_value = fake_client
+    fake_client.chat.completions.create = fake_create
 
     fake_diff = "diff --git a/x b/x\n@@ +1 @@\n+ok\n"
 
-    with patch.dict(
-        "sys.modules",
-        {"google": MagicMock(genai=fake_genai_module), "google.genai": fake_genai_module},
-    ), \
+    with patch("memex.mcp_server.tools_explain.openai.AsyncOpenAI", return_value=fake_client), \
+         patch("memex.mcp_server.tools_explain.get_config") as mock_get_config, \
          patch("memex.mcp_server.tools_explain._git_show", new=AsyncMock(return_value=fake_diff)), \
          patch(
              "memex.mcp_server.tools_explain._query_linked_decisions_and_problems",
              new=AsyncMock(return_value=[]),
          ):
+        mock_get_config.return_value = SimpleNamespace(
+            litellm_base_url="http://localhost:4000",
+            litellm_api_key="fake_key",
+            litellm_model="sentinel-default-model",
+            pro_model="sentinel-pro-model",
+            repo_root=None,
+        )
         await explain_change("abc1234")
 
-    assert captured.get("model"), "model id was not captured — genai patch missed"
-    model_id = captured["model"].lower()
-    assert "pro" in model_id, f"explain_change must use Gemini Pro, got: {captured['model']}"
-    assert "flash" not in model_id, f"explain_change must NOT use Flash, got: {captured['model']}"
+    assert captured.get("model"), "model id was not captured — gateway patch missed"
+    assert captured["model"] == "sentinel-pro-model", (
+        f"explain_change must use config.pro_model, got: {captured['model']}"
+    )
+    assert captured["model"] != "sentinel-default-model"
 
 
 @pytest.mark.asyncio

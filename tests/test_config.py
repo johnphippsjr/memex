@@ -143,7 +143,7 @@ def test_config_report_scheduling_defaults():
     report_hour must differ from decay_hour by default (regression guard for
     research Pitfall 2 — the two jobs must not collide on the same hour)."""
     cfg = Config(
-        neo4j_uri="x", neo4j_user="x", neo4j_password="x", gemini_api_key="x"
+        falkor_host="x", litellm_base_url="x", litellm_api_key="x", litellm_model="x"
     )
     assert cfg.report_hour == 3
     assert cfg.report_day_of_week == "mon"

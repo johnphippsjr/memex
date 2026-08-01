@@ -5,6 +5,19 @@ from memex.watcher.handlers import handle_commit
 from memex.watcher.events import CommitEvent
 from memex.graph.client import get_graph_client, reset_graph_client
 
+# falkordb-litellm fork note: these 3 tests call the REAL get_graph_client()
+# and issue real Cypher writes/reads (no client mocking) — they always
+# required a live local graph backend on the docker-compose default port,
+# even against the original Neo4j client (Neo4j's driver is lazy, so the
+# equivalent failure there surfaced one call later, at the first
+# execute_query, instead of at client construction — same net requirement).
+# FalkorDB's Python client eagerly opens/pings the connection during
+# FalkorDriver's own __init__, which makes the missing-backend failure
+# surface immediately and impossible to ignore. Marking these `integration`
+# corrects a pre-existing mis-categorization rather than papering over it.
+pytestmark = pytest.mark.integration
+
+
 @pytest.fixture(autouse=True)
 async def cleanup_client():
     """Ensure a fresh graph client for every test."""
