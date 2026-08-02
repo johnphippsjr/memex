@@ -176,6 +176,41 @@ def _ext(path: str) -> str:
     return path.rsplit(".", 1)[-1].lower() if "." in path else ""
 
 
+def _detect_intrafile_renames(delta) -> dict:
+    """A function renamed IN PLACE (foo->bar, same file, same commit) shows up as
+    a removed `foo` + an added `bar` — git tracks file renames, not symbol ones.
+    Match them by signature similarity so the stable sid carries (#801).
+
+    Greedy 1:1 above a CONSERVATIVE threshold (difflib ratio >= 0.6); matched
+    removals are dropped from ``delta.removed`` so a rename is not ALSO recorded
+    as a delete. Returns ``{(new_name,new_file): (old_name,old_file,ratio)}``.
+    Heavily-rewritten renames below the threshold are left as delete+add (safe,
+    conservative) rather than guessed — the operator was flagged on this default.
+    """
+    import difflib
+
+    renames: dict = {}
+    if not delta.removed or not delta.added:
+        return renames
+    remaining = list(delta.removed)
+    for added in delta.added:
+        best, best_ratio = None, 0.0
+        for removed in remaining:
+            if removed.file != added.file:
+                continue
+            ratio = difflib.SequenceMatcher(
+                None, removed.signature or removed.name, added.signature or added.name
+            ).ratio()
+            if ratio > best_ratio:
+                best_ratio, best = ratio, removed
+        if best is not None and best_ratio >= 0.6:
+            renames[(added.name, added.file)] = (best.name, best.file, round(best_ratio, 3))
+            remaining.remove(best)
+    matched = {(o[0], o[1]) for o in renames.values()}
+    delta.removed = [r for r in delta.removed if (r.name, r.file) not in matched]
+    return renames
+
+
 # ---------------------------------------------------------------------------
 # checkpoint
 # ---------------------------------------------------------------------------
@@ -251,10 +286,20 @@ async def ingest_commit(sha: str, repo: str, repo_id: str, stats: IngestStats,
         new_content = "" if cf.status == "D" else blob_at(repo, sha, cf.path)
 
         try:
-            delta = await extract_symbol_delta(cf.path, old_content, new_content)
+            if cf.status == "R" and cf.old_path:
+                # FILE MOVE (git-detected old_path -> path): treat every symbol in
+                # the new file as CARRIED from old_path, so its stable sid follows
+                # the move instead of orphaning (#801). extract_symbol_delta with
+                # old="" yields them all as `added`; the rename map points each at
+                # its old path (git similarity ~ exact for a pure rename).
+                delta = await extract_symbol_delta(cf.path, "", new_content)
+                renames = {(s.name, s.file): (s.name, cf.old_path, 1.0) for s in delta.added}
+            else:
+                delta = await extract_symbol_delta(cf.path, old_content, new_content)
+                renames = _detect_intrafile_renames(delta)
             summary = await write_symbol_delta(
                 delta, source_commit=sha, repo_root=repo_id,
-                commit_time=when, versioned=True,
+                commit_time=when, bitemporal=True, renames=renames,
             )
             stats.symbols_written += (summary or {}).get("symbols", 0)
         except Exception:

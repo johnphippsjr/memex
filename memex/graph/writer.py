@@ -291,12 +291,208 @@ async def _version_structured_symbol(
         )
 
 
+# ---------------------------------------------------------------------------
+# Board #801 — bitemporal Symbol identity (operator: the DEEPER REBUILD).
+#
+# The overwrite/versioned paths key a Symbol on (name, file, repo_path) [+
+# valid_from]. A rename or a file-move changes name/file, so it mints a NEW node
+# with no link to the symbol's past — history shatters and the write reports
+# success. #801: a STABLE ``sid`` is minted once and CARRIED across renames/
+# moves; name/file/signature become time-varying; and the lifetime is expressed
+# as EDGE FACTS to :Commit / :File nodes (INTRODUCED_IN / DEFINED_IN /
+# REMOVED_IN / RENAMED_TO) rather than a fresh node per commit-era. Used only by
+# the #787 historical ingest (bitemporal=True); the live watcher and the #786
+# versioned tests are untouched.
+# ---------------------------------------------------------------------------
+
+_SYMBOL_SID_NAMESPACE = uuid_module.uuid5(
+    uuid_module.NAMESPACE_URL, "https://github.com/johnphippsjr/memex/symbol-sid"
+)
+
+
+def _mint_sid(repo_root, commit, name, file) -> str:
+    """First-sighting sid — deterministic (uuid5) so a resumed ingest re-derives
+    the SAME sid for the same first sighting (repo, commit, name, file)."""
+    return str(uuid_module.uuid5(
+        _SYMBOL_SID_NAMESPACE, f"{repo_root or ''}|{commit or ''}|{name}|{file}"
+    ))
+
+
+#: Resolve the stable sid for a symbol being (re)written: an in-place open
+#: version (same name+file, still live) wins; else the rename SOURCE (old
+#: name+file, when the caller detected a rename/move); else NULL -> mint fresh.
+_RESOLVE_SID_QUERY = """
+OPTIONAL MATCH (ip:Entity {name: $name, file: $file, repo_path: $repo})
+  WHERE ip.type = 'Symbol' AND ip.valid_until IS NULL
+WITH ip
+OPTIONAL MATCH (rn:Entity {name: $old_name, file: $old_file, repo_path: $repo})
+  WHERE rn.type = 'Symbol' AND rn.valid_until IS NULL
+RETURN coalesce(ip.sid, rn.sid) AS sid
+"""
+
+#: The stable identity node, keyed on sid. Current state in properties; the
+#: :Entity:Symbol label + card embedding (#786) stay so search/predict_impact
+#: keep working. introduced_* are set once; everything else refreshes each
+#: sighting. name/file/signature are now TIME-VARYING (history is in the edges).
+_BITEMPORAL_NODE_QUERY = """
+MERGE (s:Entity {sid: $sid})
+  ON CREATE SET s.type = 'Symbol', s.repo_path = $repo,
+                s.introduced_at = $now, s.introduced_commit = $commit,
+                s.uuid = $sid, s.group_id = $group_id,
+                s.write_policy = 'locked', s.access_count = 0
+SET s:Symbol,
+    s.name = $name, s.file = $file, s.signature = $signature,
+    s.kind = $kind, s.line = $line,
+    s.valid_from = coalesce(s.introduced_at, $now), s.valid_until = NULL,
+    s.source_commit = $commit, s.last_reinforced_at = $now, s.summary = $summary
+"""
+_BITEMPORAL_NODE_QUERY_EMBEDDED = _BITEMPORAL_NODE_QUERY + (
+    ", s.name_embedding = vecf32($name_embedding)"
+)
+
+_INTRODUCED_IN_QUERY = """
+MATCH (s:Entity {sid: $sid})
+MERGE (c:Entity {type: 'Commit', name: $commit, repo_path: $repo})
+  ON CREATE SET c.created_at = $now
+MERGE (s)-[r:INTRODUCED_IN]->(c)
+  ON CREATE SET r.at = $now
+"""
+
+#: Snapshot of the currently-open DEFINED_IN interval, so python can decide
+#: whether (name,file,signature) changed since the last sighting.
+_OPEN_DEFINED_IN_QUERY = """
+MATCH (s:Entity {sid: $sid})-[d:DEFINED_IN]->(:Entity)
+WHERE d.until IS NULL
+RETURN d.name AS name, d.file AS file, d.signature AS signature
+LIMIT 1
+"""
+
+_CLOSE_OPEN_DEFINED_IN_QUERY = """
+MATCH (s:Entity {sid: $sid})-[d:DEFINED_IN]->(:Entity)
+WHERE d.until IS NULL
+SET d.until = $now
+"""
+
+#: Open a new DEFINED_IN interval (idempotent on re-processing the same commit —
+#: the {from:$now} MERGE key means a resumed run MATCHes the same interval).
+_OPEN_DEFINED_IN_INTERVAL_QUERY = """
+MATCH (s:Entity {sid: $sid})
+MERGE (f:Entity {type: 'File', name: $file, repo_path: $repo})
+  ON CREATE SET f.created_at = $now
+MERGE (s)-[d:DEFINED_IN {from: $now}]->(f)
+  ON CREATE SET d.until = NULL, d.name = $name, d.file = $file,
+                d.signature = $signature, d.commit = $commit
+"""
+
+_RENAMED_TO_QUERY = """
+MATCH (s:Entity {sid: $sid})
+MERGE (c:Entity {type: 'Commit', name: $commit, repo_path: $repo})
+  ON CREATE SET c.created_at = $now
+MERGE (s)-[r:RENAMED_TO {commit: $commit}]->(c)
+  ON CREATE SET r.at = $now, r.from_name = $old_name, r.from_file = $old_file,
+                r.to_name = $name, r.to_file = $file, r.similarity = $similarity
+"""
+
+#: Removal in the bitemporal model: close the node's validity AND its open
+#: DEFINED_IN interval, and stamp a REMOVED_IN edge to the removing commit.
+_REMOVED_IN_QUERY = """
+MATCH (s:Entity {name: $name, file: $file, repo_path: $repo})
+WHERE s.type = 'Symbol' AND s.valid_until IS NULL
+SET s.valid_until = $now
+WITH s
+MERGE (c:Entity {type: 'Commit', name: $commit, repo_path: $repo})
+  ON CREATE SET c.created_at = $now
+MERGE (s)-[r:REMOVED_IN]->(c)
+  ON CREATE SET r.at = $now
+WITH s
+MATCH (s)-[d:DEFINED_IN]->(:Entity)
+WHERE d.until IS NULL
+SET d.until = $now
+"""
+
+
+async def _write_bitemporal_symbol(
+    client, sym, repo_root, now, commit, group_id=None, rename_from=None,
+) -> None:
+    """#801: write/continue a symbol under a STABLE sid, recording lifetime as
+    edge facts. ``rename_from`` = (old_name, old_file, similarity) when the
+    caller detected this symbol continues a renamed/moved one; then the old
+    symbol's sid is carried forward and a RENAMED_TO edge records the event."""
+    old_name = old_file = similarity = None
+    if rename_from:
+        old_name, old_file, similarity = rename_from
+
+    # 1. resolve or mint the sid
+    try:
+        res = await client.driver.execute_query(_RESOLVE_SID_QUERY, params={
+            "name": sym.name, "file": sym.file, "repo": repo_root,
+            "old_name": old_name, "old_file": old_file,
+        })
+        sid = res.records[0].get("sid") if res.records else None
+    except Exception:
+        sid = None
+    if not sid:
+        sid = _mint_sid(repo_root, commit, sym.name, sym.file)
+
+    summary = f"{sym.kind} {sym.name} in {sym.file}" + (
+        f", line {sym.line}" if sym.line else ""
+    )
+    params = {
+        "sid": sid, "name": sym.name, "file": sym.file, "repo": repo_root,
+        "signature": sym.signature, "kind": sym.kind, "line": sym.line,
+        "now": now, "commit": commit, "group_id": group_id, "summary": summary,
+    }
+    # 2. identity node (+ best-effort card embedding, like the other paths)
+    query = _BITEMPORAL_NODE_QUERY
+    try:
+        params["name_embedding"] = await client.embedder.create(_symbol_card(sym, repo_root))
+        query = _BITEMPORAL_NODE_QUERY_EMBEDDED
+    except Exception:
+        logger.warning(
+            "bitemporal symbol embed failed for %s in %s; node written without "
+            "name_embedding", sym.name, sym.file, exc_info=True,
+        )
+    try:
+        await client.driver.execute_query(query, params=params)
+        await client.driver.execute_query(_INTRODUCED_IN_QUERY, params={
+            "sid": sid, "commit": commit, "repo": repo_root, "now": now,
+        })
+        # 3. DEFINED_IN interval — open a NEW one only when (name,file,signature)
+        # changed since the last open interval (idempotent on re-processing).
+        openrows = await client.driver.execute_query(
+            _OPEN_DEFINED_IN_QUERY, params={"sid": sid}
+        )
+        cur = openrows.records[0] if openrows.records else None
+        unchanged = bool(cur) and cur.get("name") == sym.name and \
+            cur.get("file") == sym.file and cur.get("signature") == sym.signature
+        if not unchanged:
+            if cur:
+                await client.driver.execute_query(
+                    _CLOSE_OPEN_DEFINED_IN_QUERY, params={"sid": sid, "now": now}
+                )
+            await client.driver.execute_query(_OPEN_DEFINED_IN_INTERVAL_QUERY, params=params)
+        # 4. rename provenance
+        if rename_from:
+            await client.driver.execute_query(_RENAMED_TO_QUERY, params={
+                "sid": sid, "commit": commit, "repo": repo_root, "now": now,
+                "old_name": old_name, "old_file": old_file,
+                "name": sym.name, "file": sym.file, "similarity": similarity,
+            })
+    except Exception:
+        logger.warning(
+            "bitemporal symbol write failed for %s in %s; history for this "
+            "symbol may be incomplete", sym.name, sym.file, exc_info=True,
+        )
+
+
 async def write_symbol_delta(
     delta: SymbolDelta,
     source_commit: str | None = None,
     repo_root: str | None = None,
     commit_time: datetime | None = None,
     versioned: bool = False,
+    bitemporal: bool = False,
+    renames: dict | None = None,
 ) -> None:
     """
     Writes a SymbolDelta to Graphiti.
@@ -340,6 +536,44 @@ async def write_symbol_delta(
     client = await get_graph_client()
     config = get_config()
     now = commit_time or datetime.now(UTC)
+    renames = renames or {}
+
+    # Board #801 (DEEPER REBUILD): stable-sid identity + edge-fact lifetimes.
+    # ``renames`` maps a new (name, file) -> (old_name, old_file, similarity) for
+    # symbols the caller (#787 ingest) detected as renamed/moved, so the sid is
+    # carried instead of shattering. Kept as a separate branch so the overwrite
+    # and #786 versioned paths (and their tests) are untouched.
+    if bitemporal:
+        for sym in delta.added:
+            try:
+                SymbolNode(
+                    name=sym.name, kind=sym.kind, signature=sym.signature,
+                    file=sym.file, line=sym.line, valid_from=now,
+                    source_commit=source_commit,
+                )
+            except ValidationError as e:
+                raise MemexSchemaError("SymbolNode", e.errors())
+            await _write_bitemporal_symbol(
+                client, sym, repo_root, now, source_commit,
+                group_id=config.unified_group_id,
+                rename_from=renames.get((sym.name, sym.file)),
+            )
+        for sym in delta.modified:
+            await _write_bitemporal_symbol(
+                client, sym, repo_root, now, source_commit,
+                group_id=config.unified_group_id,
+                rename_from=renames.get((sym.name, sym.file)),
+            )
+        for sym in delta.removed:
+            await client.driver.execute_query(_REMOVED_IN_QUERY, params={
+                "name": sym.name, "file": sym.file, "repo": repo_root,
+                "commit": source_commit, "now": now,
+            })
+        return {
+            "symbols": len(delta.added) + len(delta.modified),
+            "episodes_skipped": 0,
+        }
+
     _write = _version_structured_symbol if versioned else _merge_structured_symbol
 
     # 1. Added symbols
