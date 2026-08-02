@@ -622,6 +622,7 @@ async def write_decision(
     source: str = "watcher",
     repo_root: str | None = None,
     commit_time: datetime | None = None,
+    entity_types: dict | None = None,
 ) -> None:
     """
     Writes a technical decision to Graphiti, plus its MOTIVATES edges to the
@@ -632,6 +633,16 @@ async def write_decision(
     ``commit_time``, when known (the commit's real authored/committed time —
     see watcher/git_hook.py), anchors this decision's reference_time/
     created_at instead of the ingestion wall-clock time (council fix 4).
+
+    ``entity_types`` (board #787) is passed straight through to the NL
+    ``add_episode`` call. The historical ingest passes
+    ``{"Symbol": SymbolEntityType}`` so that when this decision's extraction
+    resolves an entity onto an existing :Symbol node, graphiti-core's
+    ``extract_attributes_from_nodes`` overlay-merge preserves the node's
+    ground-truth structural props (file/line/signature/repo_path) instead of
+    replacing them with ``{}`` — see SymbolEntityType's docstring. The live
+    watcher leaves it ``None`` (unchanged behaviour): its symbols are written
+    overwrite-in-place, and no episode there resolves onto them by name.
     """
     client = await get_graph_client()
     config = get_config()
@@ -706,6 +717,11 @@ async def write_decision(
             # the effect and inverts its apparent direction.
             source=EpisodeType.text,
             group_id=config.unified_group_id,
+            # Board #787: register :Symbol so a resolve-and-save onto an
+            # existing Symbol node overlays (keeps file/line/...) instead of
+            # wiping it. None for the live watcher (unchanged). graphiti-core
+            # ignores a None entity_types, so this is safe to always pass.
+            **({"entity_types": entity_types} if entity_types else {}),
         )
     except Exception:
         logger.warning(

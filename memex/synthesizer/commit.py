@@ -115,6 +115,14 @@ async def extract_decisions(
                 model=config.litellm_model,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
+                # enable_thinking:false — the local qwen3.5 models (the #787
+                # ingest runs against the local card) route EVERY token into
+                # hidden reasoning otherwise and return an empty body, so this
+                # direct call would extract zero decisions on every commit
+                # (board #773 c6551349, same trap SalvagingLocalClient handles
+                # for the add_episode path). A provider that doesn't think
+                # (DeepInfra) ignores the extra_body, so it is always safe.
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
 
             content = response.choices[0].message.content or ""
