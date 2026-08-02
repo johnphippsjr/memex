@@ -350,12 +350,17 @@ _BITEMPORAL_NODE_QUERY_EMBEDDED = _BITEMPORAL_NODE_QUERY + (
     ", s.name_embedding = vecf32($name_embedding)"
 )
 
+#: INTRODUCED_IN points at the symbol's OWN introduced_commit (set once, ON
+#: CREATE), NOT $commit — so re-processing the symbol on every later commit
+#: MERGEs the SAME edge idempotently (exactly one INTRODUCED_IN per symbol),
+#: rather than one per commit that touches it.
 _INTRODUCED_IN_QUERY = """
 MATCH (s:Entity {sid: $sid})
-MERGE (c:Entity {type: 'Commit', name: $commit, repo_path: $repo})
-  ON CREATE SET c.created_at = $now
+WITH s, s.introduced_commit AS ic, s.introduced_at AS iat
+MERGE (c:Entity {type: 'Commit', name: ic, repo_path: $repo})
+  ON CREATE SET c.created_at = iat
 MERGE (s)-[r:INTRODUCED_IN]->(c)
-  ON CREATE SET r.at = $now
+  ON CREATE SET r.at = iat
 """
 
 #: Snapshot of the currently-open DEFINED_IN interval, so python can decide
