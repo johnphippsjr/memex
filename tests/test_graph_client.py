@@ -50,6 +50,7 @@ async def test_llm_and_reranker_configs_receive_pinned_temperature(monkeypatch):
     monkeypatch.setattr(gc, "LLMConfig", _FakeLLMConfig)
     monkeypatch.setattr(gc, "CompatFalkorDriver", _Stub)
     monkeypatch.setattr(gc, "OpenAIGenericClient", _Stub)
+    monkeypatch.setattr(gc, "SalvagingLocalClient", _Stub)  # #790: the LLM client is this now
     monkeypatch.setattr(gc, "OpenAIEmbedder", _Stub)
     monkeypatch.setattr(gc, "OpenAIEmbedderConfig", _Stub)
     monkeypatch.setattr(gc, "OpenAIRerankerClient", _Stub)

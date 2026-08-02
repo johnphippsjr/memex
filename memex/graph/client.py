@@ -1,16 +1,126 @@
+import json
 import logging
+import typing
 from typing import Optional
 from neo4j import EagerResult
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.driver.falkordb_driver import FalkorDriver
-from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
-from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient, DEFAULT_MODEL
+from graphiti_core.llm_client.config import LLMConfig, DEFAULT_MAX_TOKENS, ModelSize
+from graphiti_core.llm_client.errors import EmptyResponseError, RateLimitError
+from graphiti_core.prompts.models import Message
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
+from pydantic import BaseModel
+import openai as _openai
 from memex.config import get_config
 from memex.graph.graphiti_query_patches import apply_all_patches
 
 logger = logging.getLogger(__name__)
+
+
+def _salvage_truncated_json(raw: str):
+    """Board #790: repair a JSON string truncated mid-token (max_tokens cut) to
+    its largest valid prefix, or None. One walk (string-state + bracket stack),
+    cut at the last safe value boundary, drop a dangling comma, append closers.
+    The counting-loop failure is a real edge whose episode_indices list ran away;
+    this keeps the edge instead of losing the whole extraction. Mirrors the same
+    function shipped in the seed (homek8 seed_phase2.py, board #790)."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    stack, in_str, esc = [], False, False
+    safe_end = safe_stack = None
+    for i, ch in enumerate(raw):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+                safe_end, safe_stack = i + 1, list(stack)
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            safe_end, safe_stack = i + 1, list(stack)
+        elif ch == ",":
+            safe_end, safe_stack = i, list(stack)
+        elif ch.isdigit() or ch in ".eE+-":
+            safe_end, safe_stack = i + 1, list(stack)
+    if safe_end is None or not safe_stack:
+        return None
+    prefix = raw[:safe_end].rstrip().rstrip(",")
+    closers = "".join("}" if b == "{" else "]" for b in reversed(safe_stack))
+    try:
+        return json.loads(prefix + closers)
+    except json.JSONDecodeError:
+        return None
+
+
+class SalvagingLocalClient(OpenAIGenericClient):
+    """OpenAIGenericClient for the LOCAL-card ingest (#787), with two additions
+    over the stock client, each mirroring what the production seed already does:
+
+    1. ``enable_thinking: false`` via extra_body. The local qwen3.5 models route
+       EVERY token into hidden reasoning otherwise and return an empty body
+       (confirmed live, board #773 ``c6551349``); the stock client does not set
+       it, so it only works against providers that don't think.
+    2. Board #790 SALVAGE. On a JSONDecodeError (the counting-loop truncation)
+       repair the response to its largest valid prefix and return that, instead
+       of raising into graphiti's retry which just re-rolls the same runaway.
+
+    _generate_response is copied from graphiti-core 0.29.3 verbatim, plus the
+    extra_body kwarg and the salvage branch — no other behaviour changes.
+    """
+
+    async def _generate_response(
+        self, messages, response_model=None,
+        max_tokens: int = DEFAULT_MAX_TOKENS, model_size: ModelSize = ModelSize.medium,
+    ):
+        openai_messages = []
+        for m in messages:
+            m.content = self._clean_input(m.content)
+            if m.role == "user":
+                openai_messages.append({"role": "user", "content": m.content})
+            elif m.role == "system":
+                openai_messages.append({"role": "system", "content": m.content})
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model or DEFAULT_MODEL,
+                messages=openai_messages,
+                temperature=self.temperature,
+                max_tokens=max_tokens,
+                response_format=self._build_response_format(response_model),
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            result = response.choices[0].message.content or ""
+            if not result:
+                raise EmptyResponseError("LLM returned an empty response")
+            cleaned = self._strip_code_fences(result)
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                salvaged = _salvage_truncated_json(cleaned)
+                if salvaged is not None:
+                    logger.warning(
+                        "salvaged a truncated extraction response (%d edge(s)) "
+                        "instead of dropping it (board #790)",
+                        len(salvaged.get("edges", [])) if isinstance(salvaged, dict) else 0,
+                    )
+                    return salvaged
+                raise
+        except _openai.RateLimitError as e:
+            raise RateLimitError from e
+        except Exception as e:
+            logger.error(f"Error in generating LLM response: {e}")
+            raise
 
 
 class _CompatRecord(dict):
@@ -178,7 +288,12 @@ class GraphClient:
                 model=config.litellm_model,
                 temperature=config.llm_temperature,
             )
-            llm_client = OpenAIGenericClient(
+            # SalvagingLocalClient, not the stock OpenAIGenericClient: it adds
+            # enable_thinking:false (the local qwen models return an empty body
+            # otherwise, board #773) and board #790's truncated-response salvage.
+            # Both are no-ops against a well-behaved provider, so this is safe for
+            # DeepInfra too — it only changes behaviour on an empty/broken body.
+            llm_client = SalvagingLocalClient(
                 config=llm_config,
                 structured_output_mode=config.llm_structured_output_mode,
             )
