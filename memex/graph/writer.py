@@ -471,6 +471,87 @@ async def write_call_edges(calls, repo_root: str | None = None) -> int:
     return written
 
 
+#: REFERENCES-edge MERGE for infra resources (board #788 GAP 1). Same
+#: CONSERVATIVE resolution as CALLS: a resource->resource reference is linked
+#: only when the referent (kind, name) resolves to exactly ONE resource node in
+#: the repo (``size(ts)=1``). A referent's identity is ``Kind/[ns/]name``, so we
+#: match on the ``Kind/`` prefix + ``/name`` suffix — this resolves across
+#: namespaces without needing the referencing manifest to know the target's ns.
+#: External references (a container ``image`` from a registry) have no resource
+#: node and so naturally produce no edge, which is correct: the graph models the
+#: repo's own dependency structure, not the outside world.
+_RESOURCE_REF_EDGE_QUERY = """
+MATCH (src:Entity {name: $src, repo_path: $repo})
+WHERE src.type = 'Symbol' AND src.kind = 'resource'
+MATCH (tgt:Entity {repo_path: $repo})
+WHERE tgt.type = 'Symbol' AND tgt.kind = 'resource'
+      AND tgt.name STARTS WITH $kind_prefix AND tgt.name ENDS WITH $name_suffix
+WITH src, collect(DISTINCT tgt) AS ts
+WHERE size(ts) = 1
+UNWIND ts AS tgt
+MERGE (src)-[r:REFERENCES]->(tgt)
+  ON CREATE SET r.created_at = $now,
+                r.expired_at = NULL,
+                r.via = $via,
+                r.ref_kind = $ref_kind,
+                r.last_reinforced_at = $now
+  ON MATCH SET  r.expired_at = NULL,
+                r.via = $via,
+                r.last_reinforced_at = $now
+RETURN count(r) AS n
+"""
+
+
+async def write_resource_ref_edges(extract, repo_root: str | None = None) -> int:
+    """Persist REFERENCES edges for a k8s file's resolved resource references.
+
+    Expects a :class:`memex.extractor.k8s.K8sExtract` (its ``.refs`` maps a
+    resource symbol-key to the ResourceRefs it declares). Returns the number of
+    edges written/refreshed. Best-effort per edge; mirrors write_call_edges.
+
+    Only references that resolve to exactly one resource node in the same repo
+    become edges — Image refs and dangling names (a Secret referenced but not
+    defined in this repo) are silently left un-linked rather than fabricating a
+    target node.
+    """
+    refs_by_key = getattr(extract, "refs", None) or {}
+    if not refs_by_key:
+        return 0
+
+    client = await get_graph_client()
+    now = datetime.now(UTC)
+    written = 0
+
+    for key, refs in refs_by_key.items():
+        # symbol-key is "<identity>:resource"; the identity is the node name.
+        src_identity = key.rsplit(":", 1)[0]
+        for ref in refs:
+            if ref.kind == "Image":
+                continue  # external, no in-repo node to point at
+            try:
+                res = await client.driver.execute_query(
+                    _RESOURCE_REF_EDGE_QUERY,
+                    params={
+                        "src": src_identity,
+                        "repo": repo_root,
+                        "kind_prefix": f"{ref.kind}/",
+                        "name_suffix": f"/{ref.name}",
+                        "via": ref.via,
+                        "ref_kind": ref.kind,
+                        "now": now,
+                    },
+                )
+                if res.records:
+                    written += int(res.records[0].get("n") or 0)
+            except Exception:
+                logger.warning(
+                    "REFERENCES edge write failed for %s -> %s/%s in repo %s",
+                    src_identity, ref.kind, ref.name, repo_root, exc_info=True,
+                )
+
+    return written
+
+
 #: Structured Decision node + THE RATIONALE LINK, in one transaction.
 #:
 #: Council fix 1 (the rationale link — the operator's primary goal): all 19

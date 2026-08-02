@@ -176,6 +176,32 @@ def get_symbols_from_content(content: str, file_path: str, language_name: str) -
 
     return symbols
 
+def _k8s_symbol_delta(file_path: str, old_content: str, new_content: str) -> SymbolDelta:
+    """Diff two revisions of a k8s YAML file into a SymbolDelta (board #788).
+
+    Same add/modify/remove shape as the code path, keyed on the resource
+    identity, so infra resources flow through the identical writer. Reference
+    edges are NOT carried on SymbolDelta — the caller that wants them calls
+    ``memex.extractor.k8s.extract_k8s_symbols`` directly and feeds
+    ``write_resource_ref_edges``.
+    """
+    from memex.extractor.k8s import extract_k8s_symbols
+
+    old_syms = extract_k8s_symbols(file_path, old_content).symbols
+    new_syms = extract_k8s_symbols(file_path, new_content).symbols
+
+    delta = SymbolDelta()
+    for key, new_sym in new_syms.items():
+        if key not in old_syms:
+            delta.added.append(new_sym)
+        elif old_syms[key].signature != new_sym.signature:
+            delta.modified.append(new_sym)
+    for key, old_sym in old_syms.items():
+        if key not in new_syms:
+            delta.removed.append(old_sym)
+    return delta
+
+
 async def extract_symbol_delta(
     file_path: str,
     old_content: str,
@@ -191,15 +217,23 @@ async def extract_symbol_delta(
             "rs": "rust",
             "go": "go"
         }
+        # Board #788 GAP 1: k8s/infra YAML has no functions or classes — it has
+        # resources with apiVersion/kind/namespace/name identity. Route it to
+        # the dedicated k8s extractor (its own shape, deterministic, no LLM)
+        # instead of the tree-sitter code path. Non-k8s YAML yields nothing there
+        # (honest), same as an unmapped extension here.
+        if ext in ("yaml", "yml"):
+            return _k8s_symbol_delta(file_path, old_content, new_content)
+
         language = lang_map.get(ext)
         if language is None:
             # Council fix 5b: this used to default every unmapped extension
-            # (.yaml, .tf, .hcl, ...) to "python", so e.g. an infrastructure
-            # repo's YAML got parsed as Python, produced zero real symbols
-            # (a parse mismatch, not an honestly-empty file), and
-            # handle_file_change logged it as an ordinary successful index
-            # pass. Skip loudly instead of silently guessing wrong. A real
-            # YAML/HCL extractor is a separate, later task.
+            # (.tf, .hcl, ...) to "python", so e.g. an infrastructure repo's
+            # HCL got parsed as Python, produced zero real symbols (a parse
+            # mismatch, not an honestly-empty file), and handle_file_change
+            # logged it as an ordinary successful index pass. Skip loudly
+            # instead of silently guessing wrong. (.yaml/.yml are handled just
+            # above; HCL/Terraform remains a separate, later extractor.)
             logger.warning(
                 "extract_symbol_delta: no tree-sitter grammar mapped for "
                 "extension '.%s' (file=%s) — skipping symbol extraction "

@@ -34,7 +34,13 @@ class Symbol(BaseModel):
     @field_validator("kind")
     @classmethod
     def kind_must_be_valid(cls, v):
-        if v not in ("fn", "class", "const"):
+        # "resource" (board #788 GAP 1) is a k8s/infra resource — a Symbol whose
+        # identity is Kind/namespace/name rather than a code function/class.
+        # Reusing Symbol lets infra flow through the same writer and gain the
+        # :Entity:Symbol label + card embedding + versioning built for #786.
+        # Nothing branches on kind values in query logic (CALLS filters on
+        # type='Symbol'); kind is a stored/display property, so this is additive.
+        if v not in ("fn", "class", "const", "resource"):
             raise ValueError(f"invalid kind: {v}")
         return v
 
