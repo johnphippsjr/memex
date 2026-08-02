@@ -519,6 +519,48 @@ RETURN count(r) AS n
 """
 
 
+#: Board #803 — record a reference that DID NOT resolve to exactly one in-repo
+#: resource (0 matches = dangling/external, or >1 = ambiguous), instead of
+#: dropping it silently as the size(ts)=1 guard did. The placeholder target is a
+#: distinct ``type:'UnresolvedRef'`` :Entity (never collides with a real Symbol),
+#: and the edge is a REFERENCES edge flagged ``unresolved:true`` — TRAVERSAL-ONLY
+#: (no group_id, no fact_embedding), so it stays out of semantic search per the
+#: council's "pure structure stays traversal-only". A later ingest (2nd repo) or a
+#: report can then SEE the dangling dependency rather than it being invisible.
+_UNRESOLVED_REF_QUERY = """
+MATCH (src:Entity {name: $src, repo_path: $repo})
+WHERE src.type = 'Symbol' AND src.kind = 'resource'
+MERGE (u:Entity {name: $refname, repo_path: $repo, type: 'UnresolvedRef'})
+  ON CREATE SET u.created_at = $now, u.write_policy = 'locked',
+                u.access_count = 0, u.ref_kind = $ref_kind
+MERGE (src)-[r:REFERENCES {via: $via}]->(u)
+  ON CREATE SET r.created_at = $now, r.unresolved = true,
+                r.ref_kind = $ref_kind, r.expired_at = NULL
+  ON MATCH SET  r.unresolved = true
+RETURN count(r) AS n
+"""
+
+
+async def _record_unresolved_ref(client, src_identity, ref, repo_root, now) -> int:
+    """Best-effort UNRESOLVED_REF record for one dangling/ambiguous resource ref."""
+    try:
+        await client.driver.execute_query(_UNRESOLVED_REF_QUERY, params={
+            "src": src_identity,
+            "repo": repo_root,
+            "refname": f"{ref.kind}/{ref.name}",
+            "via": ref.via,
+            "ref_kind": ref.kind,
+            "now": now,
+        })
+        return 1
+    except Exception:
+        logger.warning(
+            "UNRESOLVED_REF record failed for %s -> %s/%s in repo %s",
+            src_identity, ref.kind, ref.name, repo_root, exc_info=True,
+        )
+        return 0
+
+
 async def write_resource_ref_edges(extract, repo_root: str | None = None) -> int:
     """Persist REFERENCES edges for a k8s file's resolved resource references.
 
@@ -538,6 +580,7 @@ async def write_resource_ref_edges(extract, repo_root: str | None = None) -> int
     client = await get_graph_client()
     now = datetime.now(UTC)
     written = 0
+    unresolved = 0
 
     for key, refs in refs_by_key.items():
         # symbol-key is "<identity>:resource"; the identity is the node name.
@@ -558,14 +601,26 @@ async def write_resource_ref_edges(extract, repo_root: str | None = None) -> int
                         "now": now,
                     },
                 )
-                if res.records:
-                    written += int(res.records[0].get("n") or 0)
+                n = int(res.records[0].get("n") or 0) if res.records else 0
+                written += n
+                if n == 0:
+                    # Board #803: did NOT resolve to exactly one in-repo resource
+                    # (0 = external/dangling, >1 = ambiguous). Record it rather
+                    # than dropping it silently.
+                    unresolved += await _record_unresolved_ref(
+                        client, src_identity, ref, repo_root, now
+                    )
             except Exception:
                 logger.warning(
                     "REFERENCES edge write failed for %s -> %s/%s in repo %s",
                     src_identity, ref.kind, ref.name, repo_root, exc_info=True,
                 )
 
+    if unresolved:
+        logger.info(
+            "write_resource_ref_edges: %d edge(s) written, %d UNRESOLVED_REF "
+            "recorded (repo %s)", written, unresolved, repo_root,
+        )
     return written
 
 
@@ -629,6 +684,109 @@ MERGE (d)-[r:MOTIVATES]->(m)
   ON MATCH SET  r.last_reinforced_at = $now,
                 r.expired_at = NULL
 """
+
+
+#: Board #803 — a stable, deterministic uuid for a Module node keyed on
+#: (repo_root, module_path). Module nodes are memex-MERGEd (not graphiti-created)
+#: and so carry no uuid of their own (schema.py's uuid_or_natural_key notes this);
+#: the MOTIVATES searchable shadow below needs both endpoints to have a real uuid
+#: so graphiti's edge-return/reconstruction (source_node_uuid/target_node_uuid)
+#: can look the endpoints back up. uuid5 keeps it identical across re-ingests.
+_MODULE_UUID_NAMESPACE = uuid_module.uuid5(
+    uuid_module.NAMESPACE_URL, "https://github.com/johnphippsjr/memex/module"
+)
+
+
+def _module_uuid(repo_root: str | None, module_path: str) -> str:
+    return str(uuid_module.uuid5(_MODULE_UUID_NAMESPACE, f"{repo_root or ''}|{module_path}"))
+
+
+#: Board #803 (council default: MAKE RATIONALE FINDABLE) — a deterministic,
+#: SEARCHABLE ``RELATES_TO`` twin of the structured ``MOTIVATES`` edge. graphiti's
+#: whole semantic search surface only ever traverses ``[e:RELATES_TO]`` between
+#: :Entity nodes (search_utils.py hardcodes it in ~10 places), so the structured
+#: MOTIVATES edge - a distinct relationship type - is invisible to search. The
+#: council's decision: rationale (MOTIVATES) SHOULD be findable, so write a
+#: deterministic RELATES_TO shadow carrying the decision's rationale as the
+#: ``fact`` (what BM25 + the vector index actually match), while pure-structure
+#: edges (CALLS/REFERENCES) stay traversal-only. The shadow mirrors the exact
+#: property set graphiti's own RELATES_TO edges carry (verified live against the
+#: test graph: uuid/source_node_uuid/target_node_uuid/name/fact/group_id/
+#: created_at/valid_at/expired_at/invalid_at/reference_time/fact_embedding). It
+#: is a TWIN of MOTIVATES, not a replacement - the structured MOTIVATES edge
+#: still exists for corroborate_decisions' Pass-1 file-match gate.
+_MOTIVATES_SHADOW_QUERY = """
+MATCH (d:Entity {uuid: $decision_uuid})
+MERGE (m:Entity {name: $module_path, repo_path: $repo})
+  ON CREATE SET m.type = 'Module', m.created_at = $now,
+                m.write_policy = 'locked', m.access_count = 0
+SET m.uuid = coalesce(m.uuid, $module_uuid)
+MERGE (d)-[r:RELATES_TO {uuid: $edge_uuid}]->(m)
+  ON CREATE SET r.name = 'MOTIVATES',
+                r.fact = $fact,
+                r.group_id = $group_id,
+                r.source_node_uuid = $decision_uuid,
+                r.target_node_uuid = coalesce(m.uuid, $module_uuid),
+                r.created_at = $now,
+                r.valid_at = $now,
+                r.reference_time = $now,
+                r.expired_at = NULL,
+                r.invalid_at = NULL,
+                r.episodes = []
+  ON MATCH SET  r.fact = $fact,
+                r.valid_at = $now
+"""
+_MOTIVATES_SHADOW_QUERY_EMBEDDED = _MOTIVATES_SHADOW_QUERY + (
+    ", r.fact_embedding = vecf32($fact_embedding)"
+)
+
+
+async def _write_motivates_shadow(
+    client, decision_uuid: str, decision, modules: list[str],
+    repo_root: str | None, now, group_id: str | None,
+) -> None:
+    """Write a searchable RELATES_TO twin of each MOTIVATES edge (board #803).
+
+    Best-effort, exactly like the Symbol card embedding: an embedder failure
+    degrades the shadow to BM25-only (``fact`` is still fulltext-indexed), never
+    blocks the write. The ``fact`` sentence is what search matches, so it leads
+    with the rationale, not a node label.
+    """
+    text = (getattr(decision, "text", "") or "").strip()
+    rationale = (getattr(decision, "rationale", "") or "").strip()
+    for module_path in modules:
+        fact = f"{text} (rationale: {rationale})" if rationale else text
+        fact = f"{fact} — motivates {module_path}"
+        params = {
+            "decision_uuid": decision_uuid,
+            "module_path": module_path,
+            "repo": repo_root,
+            "module_uuid": _module_uuid(repo_root, module_path),
+            "edge_uuid": str(uuid_module.uuid5(
+                _DECISION_UUID_NAMESPACE, f"motivates|{decision_uuid}|{module_path}"
+            )),
+            "fact": fact,
+            "group_id": group_id,
+            "now": now,
+        }
+        query = _MOTIVATES_SHADOW_QUERY
+        try:
+            params["fact_embedding"] = await client.embedder.create(fact)
+            query = _MOTIVATES_SHADOW_QUERY_EMBEDDED
+        except Exception:
+            logger.warning(
+                "MOTIVATES shadow embedding failed for decision %s -> %s; shadow "
+                "written BM25-only (not vector-searchable until re-index)",
+                decision_uuid, module_path, exc_info=True,
+            )
+        try:
+            await client.driver.execute_query(query, params=params)
+        except Exception:
+            logger.warning(
+                "MOTIVATES shadow write failed for decision %s -> %s; rationale "
+                "remains traversal-only via the structured MOTIVATES edge",
+                decision_uuid, module_path, exc_info=True,
+            )
 
 
 async def write_decision(
@@ -807,6 +965,15 @@ async def write_decision(
             episode_name,
             exc_info=True,
         )
+
+    # Board #803 (council default): write a SEARCHABLE RELATES_TO twin of the
+    # MOTIVATES edges so the rationale is findable (graphiti search only
+    # traverses RELATES_TO). No-op if the structured MERGE above failed — the
+    # shadow MATCHes the Decision node by uuid, so a missing node writes nothing.
+    await _write_motivates_shadow(
+        client, decision_uuid, decision, modules or [], repo_root, now,
+        config.unified_group_id,
+    )
 
 
 # ---------------------------------------------------------------------------
