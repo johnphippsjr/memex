@@ -56,6 +56,26 @@ class MemexWriteError(Exception):
 #: Symbol node from every graphiti search path. Deliberately no `:Symbol`
 #: label and no `name_embedding` — the label question is blocked on board
 #: #782's one-write test and is out of scope here.
+#: Board #786 (schema half): the Symbol node now carries the ``:Symbol`` label
+#: alongside ``:Entity`` AND a ``name_embedding`` over a composed retrieval card.
+#: Both are trailing UNCONDITIONAL SETs so they apply on create AND on match (a
+#: re-index must refresh the embedding — the signature may have changed).
+#:
+#: WHY ``:Entity:Symbol`` and not ``:Symbol`` alone: #782 proved a multi-label
+#: node is covered by the Entity fulltext index, the Entity vector index, AND
+#: both ``MATCH (n:Entity)`` and ``MATCH (n:Symbol)``. So the extra label buys a
+#: clean ``MATCH (n:Symbol)`` surface for free without dropping out of any index
+#: graphiti or predict_impact already uses.
+#:
+#: WHY embed at all, and why a CARD not the bare name: #786's retrieval
+#: experiment (227 real symbols, 30 ground-truth code queries, prod index shape)
+#: measured composed-card MRR .908 / recall@10 .967, versus bare-identifier
+#: .730 / .900, versus no-embedding .656 / .800. On natural-language queries the
+#: card scored .917 while the bare name scored .460 — i.e. embedding just the
+#: identifier is WORSE than not embedding, because bge-m3 on a short snake_case
+#: token embeds ORTHOGRAPHICALLY, not semantically. A null/absent name_embedding
+#: is silently excluded from vector KNN (also #782), so an embedding failure here
+#: degrades to "not vector-searchable", never an error.
 _SYMBOL_MERGE_QUERY = """
 MERGE (s:Entity {name: $name, file: $file, repo_path: $repo})
   ON CREATE SET s.type = 'Symbol',
@@ -79,40 +99,85 @@ MERGE (s:Entity {name: $name, file: $file, repo_path: $repo})
                 s.source_commit = coalesce($source_commit, s.source_commit),
                 s.last_reinforced_at = $now,
                 s.summary = $summary
+SET s:Symbol
 """
+
+#: Same as above but also writes the composed-card embedding. Used when the
+#: embedding succeeded; the plain query above is the fallback when it did not, so
+#: a symbol is still MERGEd and queryable structurally even with the embedder
+#: down. Kept as two constants rather than string interpolation so a bad param
+#: can never smuggle Cypher into the statement.
+_SYMBOL_MERGE_QUERY_EMBEDDED = _SYMBOL_MERGE_QUERY + (
+    ", s.name_embedding = vecf32($name_embedding)"
+)
+
+
+def _symbol_card(sym, repo_root: str | None) -> str:
+    """The composed retrieval card that gets embedded (board #786, Arm C).
+
+    Arm C's winning card in the experiment was
+    ``kind + name + file + signature + docstring + callers``. ``SymbolDelta``
+    carries kind/name/file/signature/line but NOT docstring or callers, so this
+    is the REDUCED card. That is an honest under-build: the experiment measured
+    the card while its docstring coverage undershot the corpus (33.5% vs 62.4%)
+    and it STILL won, so the reduced card is expected to help; add docstring +
+    caller ingredients here if the extractor ever carries them.
+    """
+    parts = [f"{sym.kind} {sym.name}"]
+    if sym.signature and sym.signature != sym.name:
+        parts.append(f"signature: {sym.signature}")
+    if sym.file:
+        parts.append(f"defined in {sym.file}")
+    if repo_root:
+        parts.append(f"repo {repo_root}")
+    return " | ".join(parts)
 
 
 async def _merge_structured_symbol(
     client, sym, repo_root: str | None, now, source_commit: str | None,
     group_id: str | None = None,
 ) -> None:
-    """Materialize a queryable Symbol node.
+    """Materialize a queryable, vector-searchable Symbol node.
 
-    Council fix 6: this is now the SYMBOL'S ONLY WRITE — no companion NL
-    episode (see write_symbol_delta's docstring). `summary` is a deterministic
-    string built from already-known fields, not an LLM restatement, so this
-    remains zero-GPU exactly like the rest of this file's structured writes.
+    Council fix 6: this is the SYMBOL'S ONLY WRITE — no companion NL episode
+    (see write_symbol_delta's docstring). ``summary`` is a deterministic string
+    built from already-known fields, not an LLM restatement, so the structured
+    MERGE stays zero-GPU. Board #786 adds ONE embedding call per symbol on top —
+    an embedder hop, not an LLM extraction — for the composed card.
     """
     summary = f"{sym.kind} {sym.name} in {sym.file}" + (
         f", line {sym.line}" if sym.line else ""
     )
+    params = {
+        "name": sym.name,
+        "file": sym.file,
+        "repo": repo_root,
+        "kind": sym.kind,
+        "signature": sym.signature,
+        "line": sym.line,
+        "now": now,
+        "source_commit": source_commit,
+        "uuid": str(uuid_module.uuid4()),
+        "group_id": group_id,
+        "summary": summary,
+    }
+
+    # Best-effort embedding: a failure here must degrade the symbol to
+    # "structurally present but not vector-searchable", never block the MERGE.
+    query = _SYMBOL_MERGE_QUERY
     try:
-        await client.driver.execute_query(
-            _SYMBOL_MERGE_QUERY,
-            params={
-                "name": sym.name,
-                "file": sym.file,
-                "repo": repo_root,
-                "kind": sym.kind,
-                "signature": sym.signature,
-                "line": sym.line,
-                "now": now,
-                "source_commit": source_commit,
-                "uuid": str(uuid_module.uuid4()),
-                "group_id": group_id,
-                "summary": summary,
-            },
+        embedding = await client.embedder.create(_symbol_card(sym, repo_root))
+        params["name_embedding"] = embedding
+        query = _SYMBOL_MERGE_QUERY_EMBEDDED
+    except Exception:
+        logger.warning(
+            "Symbol card embedding failed for %s in %s; node will be written "
+            "without name_embedding (not vector-searchable until re-index)",
+            sym.name, sym.file, exc_info=True,
         )
+
+    try:
+        await client.driver.execute_query(query, params=params)
     except Exception:
         logger.warning(
             "structured Symbol MERGE failed for %s in %s; predict_impact may "

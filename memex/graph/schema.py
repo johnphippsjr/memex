@@ -51,6 +51,42 @@ class Symbol(BaseModel):
         return str(v).replace('\x00', '').replace('‮', '')
 
 
+class SymbolEntityType(BaseModel):
+    """graphiti entity_type registration for :Symbol nodes (board #786 / #782).
+
+    DELIBERATELY DECLARES NO FIELDS. This is not an oversight — it is the fix.
+
+    Symbol nodes are written by ``writer._merge_structured_symbol`` via a raw
+    Cypher MERGE, carrying ground-truth structural props (``file``, ``line``,
+    ``signature``, ``repo_path``, ``kind``) that come from tree-sitter, not from
+    an LLM. In the UNIFIED graph a later episode's extraction can resolve an
+    entity to one of these nodes by name and hand it to graphiti's
+    ``extract_attributes_from_nodes``. #782 proved what happens then: with NO
+    entity_type registered for the label, ``node_operations`` resets the node's
+    ``attributes`` to ``{}`` and the following ``EntityNode.save()`` runs
+    ``SET n = $entity_data`` — a FULL PROPERTY REPLACE — silently deleting
+    file/line/signature/repo_path.
+
+    Registering this type stops that. ``extract_attributes_from_nodes`` looks
+    the type up by the node's non-Entity label (``Symbol``) and, because
+    ``apply_capped_attributes`` runs ``merge_mode='overlay'`` i.e.
+    ``{**prior, **kept}`` and ``kept`` is capped to the fields DECLARED here,
+    an empty model means ``kept == {}`` and every prior structural prop
+    survives. Declaring ``file``/``line``/etc. here would be the exact bug —
+    it would invite the LLM to overwrite ground truth. So they are omitted on
+    purpose; the ground truth is protected structurally, not by trusting the
+    model.
+
+    🚨 NOT YET WIRED. This class must be passed as
+    ``entity_types={"Symbol": SymbolEntityType}`` to the ``add_episode`` calls
+    in the repo ingest (#787). Until then it is an inert, ready-to-use artifact;
+    it is verified by reading graphiti-core 0.29.3's overlay semantics at source,
+    NOT yet end-to-end through a live resolve-and-save (that needs the ingest).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class Module(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
