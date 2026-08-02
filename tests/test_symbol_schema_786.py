@@ -74,3 +74,55 @@ def test_symbol_entity_type_declares_no_extractable_fields():
     # An instance accepts (and ignores) structural attrs without storing them.
     inst = SymbolEntityType()
     assert not inst.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Board #786 versioning half — bi-temporal Symbol history for the ingest.
+# End-to-end (two commit-times -> two nodes, old closed / new open, idempotent,
+# watcher still overwrites) was verified live against memex-fork-test on
+# 2026-08-02; these are the durable DB-free guards on the query shapes.
+# ---------------------------------------------------------------------------
+
+import inspect
+
+
+def test_write_symbol_delta_has_a_versioned_flag_defaulting_false():
+    """The live watcher must keep overwriting in place; only the ingest opts in.
+    Default False preserves the watcher's behaviour with no call-site change."""
+    sig = inspect.signature(writer.write_symbol_delta)
+    assert "versioned" in sig.parameters
+    assert sig.parameters["versioned"].default is False
+
+
+def test_version_merge_keys_on_valid_from():
+    """Each commit-time state must be its OWN node. If the MERGE key loses
+    valid_from it collapses back to overwrite-in-place and history is lost."""
+    assert "valid_from: $now" in writer._SYMBOL_VERSION_MERGE_QUERY
+    # On re-run it must be a no-op, not a re-write of the structural props:
+    # ON MATCH may only touch last_reinforced_at.
+    on_match = writer._SYMBOL_VERSION_MERGE_QUERY.split("ON MATCH SET")[1]
+    for forbidden in ("v.signature", "v.kind", "v.valid_until", "v.uuid"):
+        assert forbidden not in on_match, f"ON MATCH must not rewrite {forbidden}"
+
+
+def test_close_open_query_excludes_the_current_commit():
+    """The close-others step must exclude valid_from = $now, or a resumed run
+    re-processing the same commit would close the very version it just wrote."""
+    q = writer._SYMBOL_CLOSE_OPEN_QUERY
+    assert "valid_until IS NULL" in q
+    assert "s.valid_from <> $now" in q
+
+
+def test_removed_only_closes_the_open_version():
+    """A removal must not stamp valid_until over already-closed historical
+    versions — that would corrupt their real close-dates. Scope to the open one.
+    (Asserted on the source since the query is inline in write_symbol_delta.)"""
+    src = inspect.getsource(writer.write_symbol_delta)
+    # the removal query in the source must carry the open-version guard
+    assert "s.valid_until IS NULL" in src
+
+
+def test_versioned_and_overwrite_paths_are_distinct_functions():
+    """The two write modes must be separate code paths — the watcher's overwrite
+    must be reachable independently of the ingest's append."""
+    assert writer._merge_structured_symbol is not writer._version_structured_symbol

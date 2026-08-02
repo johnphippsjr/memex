@@ -188,11 +188,115 @@ async def _merge_structured_symbol(
         )
 
 
+#: Board #786 (versioning half) — close any OTHER open version of this symbol.
+#: "Open" = ``valid_until IS NULL``. We exclude ``valid_from = $now`` so that
+#: RE-PROCESSING the same commit (the ingest is resumable by construction, #787)
+#: never closes the very version this run is (re-)writing. At most one prior
+#: version is open, so this stamps exactly one boundary.
+_SYMBOL_CLOSE_OPEN_QUERY = """
+MATCH (s:Entity {name: $name, file: $file, repo_path: $repo})
+WHERE s.type = 'Symbol' AND s.valid_until IS NULL AND s.valid_from <> $now
+SET s.valid_until = $now
+"""
+
+#: Board #786 — upsert THE version valid from ``$now``. The MERGE key includes
+#: ``valid_from`` so each commit-time state is its OWN node (bi-temporal history)
+#: rather than an in-place overwrite, AND so a re-run is idempotent: the second
+#: pass MATCHes the node it wrote the first time and only bumps
+#: ``last_reinforced_at``. Trailing unconditional label + embedding, same as the
+#: overwrite path.
+_SYMBOL_VERSION_MERGE_QUERY = """
+MERGE (v:Entity {name: $name, file: $file, repo_path: $repo, valid_from: $now})
+  ON CREATE SET v.type = 'Symbol',
+                v.kind = $kind,
+                v.signature = $signature,
+                v.line = $line,
+                v.valid_until = NULL,
+                v.source_commit = $source_commit,
+                v.write_policy = 'locked',
+                v.access_count = 0,
+                v.last_reinforced_at = $now,
+                v.uuid = $uuid,
+                v.group_id = $group_id,
+                v.summary = $summary
+  ON MATCH SET  v.last_reinforced_at = $now
+SET v:Symbol
+"""
+_SYMBOL_VERSION_MERGE_QUERY_EMBEDDED = _SYMBOL_VERSION_MERGE_QUERY + (
+    ", v.name_embedding = vecf32($name_embedding)"
+)
+
+
+async def _version_structured_symbol(
+    client, sym, repo_root: str | None, now, source_commit: str | None,
+    group_id: str | None = None,
+) -> None:
+    """Append a bi-temporal VERSION of a Symbol instead of overwriting it.
+
+    Used only by the historical ingest (#787), where each commit records what a
+    symbol looked like *at that commit*. The live watcher keeps using
+    ``_merge_structured_symbol`` (overwrite-in-place) — you do not want a new
+    version node per editor save.
+
+    Two steps, in order:
+      1. Close any OTHER currently-open version (stamp ``valid_until = now``).
+      2. Upsert the node whose ``valid_from = now``, idempotently.
+
+    A symbol re-observed at a later commit with the SAME signature would, under
+    the delta-driven ingest, not appear in ``added``/``modified`` at all — so
+    this is only reached for genuine first-sightings and real changes. The
+    idempotent MERGE key means a resumed run re-writing the same commit is a
+    no-op, not a duplicate version.
+    """
+    summary = f"{sym.kind} {sym.name} in {sym.file}" + (
+        f", line {sym.line}" if sym.line else ""
+    )
+    params = {
+        "name": sym.name,
+        "file": sym.file,
+        "repo": repo_root,
+        "kind": sym.kind,
+        "signature": sym.signature,
+        "line": sym.line,
+        "now": now,
+        "source_commit": source_commit,
+        "uuid": str(uuid_module.uuid4()),
+        "group_id": group_id,
+        "summary": summary,
+    }
+
+    query = _SYMBOL_VERSION_MERGE_QUERY
+    try:
+        params["name_embedding"] = await client.embedder.create(
+            _symbol_card(sym, repo_root)
+        )
+        query = _SYMBOL_VERSION_MERGE_QUERY_EMBEDDED
+    except Exception:
+        logger.warning(
+            "Symbol card embedding failed for %s in %s (versioned write); node "
+            "will be written without name_embedding",
+            sym.name, sym.file, exc_info=True,
+        )
+
+    try:
+        await client.driver.execute_query(_SYMBOL_CLOSE_OPEN_QUERY, params={
+            "name": sym.name, "file": sym.file, "repo": repo_root, "now": now,
+        })
+        await client.driver.execute_query(query, params=params)
+    except Exception:
+        logger.warning(
+            "versioned Symbol write failed for %s in %s; history for this "
+            "symbol may be incomplete until the next pass",
+            sym.name, sym.file, exc_info=True,
+        )
+
+
 async def write_symbol_delta(
     delta: SymbolDelta,
     source_commit: str | None = None,
     repo_root: str | None = None,
     commit_time: datetime | None = None,
+    versioned: bool = False,
 ) -> None:
     """
     Writes a SymbolDelta to Graphiti.
@@ -220,10 +324,23 @@ async def write_symbol_delta(
     instead of a fresh ``datetime.now(UTC)`` call. Without this, replaying
     years of git history stamps every symbol with the ingestion wall-clock
     time it happened to be processed at, not the time it was true from.
+
+    Board #786 (versioning) — ``versioned`` selects the write MODE:
+      * ``False`` (default, the LIVE WATCHER): overwrite-in-place. A file
+        changing on disk should update the symbol's current shape, not spawn a
+        version node per editor save.
+      * ``True`` (the HISTORICAL INGEST, #787): append a bi-temporal version.
+        Each commit records what the symbol was AT that commit — a changed
+        signature closes the old version (``valid_until = commit_time``) and
+        opens a new one (``valid_from = commit_time``). This is what makes the
+        operator's "record changes over time" decision real instead of the
+        overwrite that silently discarded it. Requires ``commit_time`` to be the
+        real commit date, or every version stamps the wall-clock ingest moment.
     """
     client = await get_graph_client()
     config = get_config()
     now = commit_time or datetime.now(UTC)
+    _write = _version_structured_symbol if versioned else _merge_structured_symbol
 
     # 1. Added symbols
     for sym in delta.added:
@@ -242,26 +359,31 @@ async def write_symbol_delta(
             raise MemexSchemaError("SymbolNode", e.errors())
 
         # Deterministic, LLM-free structured node — the only write for this
-        # symbol now (see docstring above).
-        await _merge_structured_symbol(
+        # symbol now (see docstring above). Overwrite or append-version per
+        # ``versioned``.
+        await _write(
             client, sym, repo_root, now, source_commit,
             group_id=config.unified_group_id,
         )
 
-    # 1b. Modified symbols — refresh the structured node's signature/line so
-    # predict_impact sees current shape.
+    # 1b. Modified symbols — overwrite refreshes signature/line in place; the
+    # versioned path closes the prior version and opens a new one at commit_time.
     for sym in delta.modified:
-        await _merge_structured_symbol(
+        await _write(
             client, sym, repo_root, now, source_commit,
             group_id=config.unified_group_id,
         )
 
-    # 2. Removed symbols
+    # 2. Removed symbols — close the OPEN version only. Board #786: the old
+    # query set valid_until on EVERY matching node, which in versioned mode
+    # would overwrite the historical close-date of already-closed versions.
+    # Scoping to `valid_until IS NULL` closes exactly the currently-live version
+    # and is correct for the overwrite path too (it has a single open node).
     for sym in delta.removed:
-        # Invalidate in graph
         query = """
         MATCH (s:Entity {name: $name})
-        WHERE (s.type = 'Symbol' OR s.name CONTAINS 'Symbol') AND s.file = $file
+        WHERE (s.type = 'Symbol' OR s.name CONTAINS 'Symbol')
+              AND s.file = $file AND s.valid_until IS NULL
         SET s.valid_until = $now
         """
         await client.driver.execute_query(query, params={
