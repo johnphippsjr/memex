@@ -723,19 +723,20 @@ MERGE (m:Entity {name: $module_path, repo_path: $repo})
 SET m.uuid = coalesce(m.uuid, $module_uuid)
 MERGE (d)-[r:RELATES_TO {uuid: $edge_uuid}]->(m)
   ON CREATE SET r.name = 'MOTIVATES',
-                r.fact = $fact,
                 r.group_id = $group_id,
                 r.source_node_uuid = $decision_uuid,
                 r.target_node_uuid = coalesce(m.uuid, $module_uuid),
                 r.created_at = $now,
-                r.valid_at = $now,
                 r.reference_time = $now,
                 r.expired_at = NULL,
                 r.invalid_at = NULL,
                 r.episodes = []
-  ON MATCH SET  r.fact = $fact,
-                r.valid_at = $now
+SET r.fact = $fact, r.valid_at = $now
 """
+#: The embedded variant appends to the trailing UNCONDITIONAL ``SET`` (not the
+#: ON MATCH branch), so ``fact_embedding`` is written on CREATE too — the same
+#: shape as _SYMBOL_MERGE_QUERY_EMBEDDED. (An earlier version appended after an
+#: ``ON MATCH SET`` and so only embedded on re-write; verified/fixed live #803.)
 _MOTIVATES_SHADOW_QUERY_EMBEDDED = _MOTIVATES_SHADOW_QUERY + (
     ", r.fact_embedding = vecf32($fact_embedding)"
 )
