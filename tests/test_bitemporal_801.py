@@ -10,9 +10,10 @@ throwaway graph — see the board note.
 import pytest
 
 from memex.graph import writer as w
+from memex.graph.writer import _mint_sid
 from memex.graph.schema import Symbol
 from memex.extractor.treesitter import SymbolDelta
-from memex.ingest_history import _detect_intrafile_renames, _mint_sid
+from memex.ingest_history import _detect_intrafile_renames
 
 
 def test_mint_sid_deterministic_and_scoped():
