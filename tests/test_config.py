@@ -148,3 +148,42 @@ def test_config_report_scheduling_defaults():
     assert cfg.report_hour == 3
     assert cfg.report_day_of_week == "mon"
     assert cfg.report_hour != cfg.decay_hour
+
+
+# ---------------------------------------------------------------------------
+# Extraction sampling temperature (board #788)
+# ---------------------------------------------------------------------------
+
+
+def test_llm_temperature_defaults_to_zero():
+    """Extraction must NOT sample. graphiti-core's own DEFAULT_TEMPERATURE is 1
+    and nothing overrode it before #788, which produced a 20% malformed-output
+    rate and made identical input return wildly different extractions run to
+    run. This asserts the PROPERTY (no sampling), not an arbitrary number."""
+    cfg = Config(
+        falkor_host="x", litellm_base_url="x", litellm_api_key="x", litellm_model="x"
+    )
+    assert cfg.llm_temperature == 0.0
+
+
+def test_llm_temperature_env_override_is_coerced_to_float():
+    """LLM_TEMPERATURE arrives from the environment as a string. If it is not
+    coerced, pydantic stores a str and the OpenAI client sends a quoted value,
+    which some gateways silently ignore -- i.e. the override would appear to
+    work while changing nothing."""
+    import importlib
+    import memex.config as mc
+
+    required = {
+        "FALKOR_HOST": "x",
+        "LITELLM_BASE_URL": "x",
+        "LITELLM_API_KEY": "x",
+        "LITELLM_MODEL": "x",
+        "LLM_TEMPERATURE": "0.7",
+    }
+    with patch.dict(os.environ, required, clear=False):
+        importlib.reload(mc)
+        cfg = mc.load_config()
+        assert cfg.llm_temperature == 0.7
+        assert isinstance(cfg.llm_temperature, float)
+    importlib.reload(mc)

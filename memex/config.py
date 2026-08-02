@@ -180,6 +180,30 @@ class Config(BaseModel):
     # real constrained decoding (e.g. DeepInfra/OpenAI-proper).
     llm_structured_output_mode: str = "json_object"
 
+    # Sampling temperature for extraction. PINNED TO 0 DELIBERATELY.
+    #
+    # graphiti_core's DEFAULT_TEMPERATURE is 1 and nothing in graphiti, in this
+    # fork, or in the seed job overrode it, so every extraction ever run here
+    # sampled at full temperature. Board #788 measured what that cost, on
+    # DeepInfra Qwen3.5-35B-A3B, same 30 stratified commits, json_object mode,
+    # ONLY temperature changed:
+    #
+    #   temperature 1 -> 12 malformed-output failures in 60 episodes (20%)
+    #   temperature 0 ->  1 malformed-output failure  in 60 episodes (1.7%)
+    #
+    # It also made the pipeline measurable at all. At temperature 1 the
+    # run-to-run variance on IDENTICAL input exceeded the effect being tested
+    # (the same commit returned 3 entities/2 edges on one run and 56/48 on the
+    # next), which inverted the apparent direction of an A/B twice and produced
+    # two retracted findings. At temperature 0 the same comparison resolved
+    # cleanly: source=EpisodeType.text won 20 paired commits to 8 (p ~ 0.036)
+    # with 1.8x the relationships.
+    #
+    # Extraction is an information-extraction task, not a generative one. There
+    # is no upside to sampling here. Override via LLM_TEMPERATURE only to
+    # reproduce the old behaviour for comparison.
+    llm_temperature: float = 0.0
+
     # Embedding — MUST match the model + dimensionality the mem0 seed graph
     # was built with (bge-m3, 1024-dim per the fork plan / mem0 records), or
     # the code graph's vectors live in a different space and entity
@@ -263,6 +287,7 @@ def load_config(repo_root: Optional[str] = None) -> Config:
         "litellm_model": os.getenv("LITELLM_MODEL"),
         "pro_model": os.getenv("PRO_MODEL"),
         "llm_structured_output_mode": os.getenv("LLM_STRUCTURED_OUTPUT_MODE"),
+        "llm_temperature": os.getenv("LLM_TEMPERATURE"),
         "embedding_model": os.getenv("EMBEDDING_MODEL"),
         "embedding_dim": os.getenv("EMBEDDING_DIM"),
         "unified_group_id": os.getenv("UNIFIED_GROUP_ID"),
@@ -288,6 +313,7 @@ def load_config(repo_root: Optional[str] = None) -> Config:
     # Convert numeric strings from env to correct types for merging
     if "falkor_port" in config_dict: config_dict["falkor_port"] = int(config_dict["falkor_port"])
     if "embedding_dim" in config_dict: config_dict["embedding_dim"] = int(config_dict["embedding_dim"])
+    if "llm_temperature" in config_dict: config_dict["llm_temperature"] = float(config_dict["llm_temperature"])
     if "debounce_window" in config_dict: config_dict["debounce_window"] = float(config_dict["debounce_window"])
     if "poll_interval" in config_dict: config_dict["poll_interval"] = float(config_dict["poll_interval"])
     if "decay_hour" in config_dict: config_dict["decay_hour"] = int(config_dict["decay_hour"])

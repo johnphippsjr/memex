@@ -165,10 +165,18 @@ class GraphClient:
             # so the same mode is used here by default. Override via
             # LLM_STRUCTURED_OUTPUT_MODE=json_schema for a provider with real
             # constrained decoding (e.g. DeepInfra/OpenAI-proper).
+            # temperature=config.llm_temperature (default 0.0) — graphiti-core's
+            # DEFAULT_TEMPERATURE is 1 and nothing overrode it before board #788.
+            # Sampling at 1 produced a 20% malformed-output failure rate and made
+            # identical input return wildly different extractions run to run. See
+            # the long note on `llm_temperature` in memex/config.py for the
+            # measured numbers. Extraction is not a generative task; do not
+            # un-pin this without re-running that measurement.
             llm_config = LLMConfig(
                 api_key=config.litellm_api_key,
                 base_url=config.litellm_base_url,
                 model=config.litellm_model,
+                temperature=config.llm_temperature,
             )
             llm_client = OpenAIGenericClient(
                 config=llm_config,
@@ -203,10 +211,13 @@ class GraphClient:
             # point graphiti-core's REAL OpenAIRerankerClient at it (same
             # litellm_base_url/api_key/model as the LLM client above) instead
             # of standing up a second, separate reranker model.
+            # Same temperature pin as the extraction client above. Reranking is a
+            # scoring task — sampling it just adds jitter to result ordering.
             reranker_config = LLMConfig(
                 api_key=config.litellm_api_key,
                 base_url=config.litellm_base_url,
                 model=config.litellm_model,
+                temperature=config.llm_temperature,
             )
             cross_encoder = OpenAIRerankerClient(config=reranker_config)
 
