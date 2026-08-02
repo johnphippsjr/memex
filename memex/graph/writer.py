@@ -380,15 +380,32 @@ async def write_symbol_delta(
     # Scoping to `valid_until IS NULL` closes exactly the currently-live version
     # and is correct for the overwrite path too (it has a single open node).
     for sym in delta.removed:
+        # Board #802: scope removal to the SAME repo. The creating MERGE is
+        # keyed on {name,file,repo_path}, but this removal matched only
+        # {name,file} — and the operator chose ONE graph (per-repo partitioning
+        # rejected), the exact config where main.py/__init__.py/cli.py/setup.py
+        # collide across repos. Without the repo_path predicate, deleting `run`
+        # from repo A's app/main.py silently stamps valid_until on repo B's
+        # identically-pathed `run` too — a silent write, never an error. The
+        # #788 infra symbols (path-free identity Kind/[ns]/name) reuse this same
+        # loop, so the same predicate protects them. coalesce(...,'') on BOTH
+        # sides, not a bare ``s.repo_path = $repo``: repo_root is None for the
+        # live watcher's single-repo case, and a bare ``= NULL`` is never true in
+        # Cypher — that would silently STOP closing removed symbols there. The
+        # coalesce makes None match None (one unscoped scope) while keeping two
+        # real, distinct repo_paths apart, which is the whole point of the gate.
         query = """
         MATCH (s:Entity {name: $name})
         WHERE (s.type = 'Symbol' OR s.name CONTAINS 'Symbol')
-              AND s.file = $file AND s.valid_until IS NULL
+              AND s.file = $file
+              AND coalesce(s.repo_path, '') = coalesce($repo, '')
+              AND s.valid_until IS NULL
         SET s.valid_until = $now
         """
         await client.driver.execute_query(query, params={
             "name": sym.name,
             "file": sym.file,
+            "repo": repo_root,
             "now": now
         })
 
