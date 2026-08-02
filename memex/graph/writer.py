@@ -338,6 +338,7 @@ _BITEMPORAL_NODE_QUERY = """
 MERGE (s:Entity {sid: $sid})
   ON CREATE SET s.type = 'Symbol', s.repo_path = $repo,
                 s.introduced_at = $now, s.introduced_commit = $commit,
+                s.created_at = $now,
                 s.uuid = $sid, s.group_id = $group_id,
                 s.write_policy = 'locked', s.access_count = 0
 SET s:Symbol,
