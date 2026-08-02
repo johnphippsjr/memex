@@ -5,6 +5,7 @@ import time
 import os
 from datetime import datetime, UTC
 from typing import Optional, Dict
+from graphiti_core.nodes import EpisodeType
 from memex.graph.client import get_graph_client
 from memex.graph.schema import (
     MemexWritePolicyError,
@@ -132,7 +133,8 @@ async def _get_or_create_session(
             f"Type: AgentSession. Repo: {repo_path}. Harness: {agent}."
         ),
         source_description="agent",
-        reference_time=now
+        reference_time=now,
+        source=EpisodeType.text  # prose, not a chat turn (#788)
     )
 
     # Force repo_path + harness properties on the session node, conditionally
@@ -436,7 +438,8 @@ async def record_decision(
                 name=f"agent_decision_{now.strftime('%Y%m%d_%H%M%S')}",
                 episode_body=episode_body,
                 source_description="agent",
-                reference_time=now
+                reference_time=now,
+                source=EpisodeType.text,  # prose, not a chat turn (#788)
             )
 
             node_id = result.episode.uuid
@@ -494,7 +497,8 @@ async def record_decision(
                     name=f"link_decision_module_{now.strftime('%Y%m%d_%H%M%S')}",
                     episode_body=f"The decision '{text}' motivates changes in module '{module}'. Repo: {repo_path}",
                     source_description="agent",
-                    reference_time=now
+                    reference_time=now,
+                    source=EpisodeType.text  # prose, not a chat turn (#788)
                 )
                 link_set_clauses = ["n.repo_path = $repo"]
                 link_params = {"id": link_result.episode.uuid, "repo": repo_path}
@@ -598,7 +602,8 @@ async def record_problem(
                 name=f"agent_problem_{now.strftime('%Y%m%d_%H%M%S')}",
                 episode_body=episode_body,
                 source_description="agent",
-                reference_time=now
+                reference_time=now,
+                source=EpisodeType.text,  # prose, not a chat turn (#788)
             )
 
             node_id = result.episode.uuid
@@ -620,7 +625,8 @@ async def record_problem(
                     name=f"link_problem_module_{now.strftime('%Y%m%d_%H%M%S')}",
                     episode_body=f"The problem '{text}' was discovered in module '{module}'. Repo: {repo_path}",
                     source_description="agent",
-                    reference_time=now
+                    reference_time=now,
+                    source=EpisodeType.text  # prose, not a chat turn (#788)
                 )
                  link_set_clauses = ["n.repo_path = $repo"]
                  link_params = {"id": link_result.episode.uuid, "repo": repo_path}
@@ -709,7 +715,11 @@ async def resolve_problem(
             name=f"resolution_{problem_id}",
             episode_body=f"Problem '{rec['text']}' was resolved in session {session_name}. Resolution: {resolution_text}. Repo: {repo_path}",
             source_description="agent",
-            reference_time=now
+            reference_time=now,
+            # Prose about code, not a chat turn. See graph/writer.py's
+            # write_decision for the board #788 measurement (1.8x more
+            # relationships at temperature 0).
+            source=EpisodeType.text
         )
 
         # 4. Explicitly mark as closed via direct Cypher, conditionally

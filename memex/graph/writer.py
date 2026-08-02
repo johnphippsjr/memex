@@ -5,6 +5,7 @@ from datetime import datetime, UTC
 from pydantic import ValidationError
 from memex.config import get_config
 from memex.graph.client import get_graph_client
+from graphiti_core.nodes import EpisodeType
 from memex.graph.schema import SymbolNode, DecisionNode, Dependency
 from memex.extractor.treesitter import SymbolDelta
 
@@ -425,6 +426,17 @@ async def write_decision(
             ),
             source_description=f"git commit {commit_sha}",
             reference_time=now,
+            # source=text, NOT the EpisodeType.message default. graphiti's
+            # message prompt's FIRST rule is "always extract the speaker (the
+            # part before the colon)", and this body opens with "Decision: ...",
+            # so the default makes the extractor treat the literal word
+            # "Decision" as a dialogue participant. Board #788 measured the fix
+            # at 1.8x more relationships (20 paired commits to 8, p ~ 0.036) and
+            # it halves the class of episode whose only extracted entity is a
+            # label or an author name. NOTE: only measurable at temperature 0 -
+            # at graphiti's default of 1 the run-to-run variance is larger than
+            # the effect and inverts its apparent direction.
+            source=EpisodeType.text,
             group_id=config.unified_group_id,
         )
     except Exception:
@@ -553,6 +565,9 @@ async def write_lockfile_delta(
                 source_description=f"lockfile scan in {repo_root}",
                 reference_time=now,
                 group_id=config.unified_group_id,
+                # "Dependency: <name> version ..." — same leading-label trap as
+                # write_decision above. See that call site for the measurement.
+                source=EpisodeType.text,
             )
         except Exception:
             logger.warning(

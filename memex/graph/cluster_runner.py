@@ -24,6 +24,8 @@ from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Optional
 
+from graphiti_core.nodes import EpisodeType
+
 from memex.extractor.lockfile import _python_files
 from memex.graph.cluster import ClusterAssignment, run_cluster_pass
 from memex.graph.schema import Cluster, check_write_policy, uuid_or_natural_key
@@ -296,6 +298,12 @@ async def write_cluster_assignments(
                 ),
                 source_description="memex cluster engine (hybrid Leiden)",
                 reference_time=now,
+                # This body is descriptive prose about code, not a chat turn.
+                # graphiti's default EpisodeType.message runs a transcript
+                # prompt over it; text is the honest description of what this
+                # is. See write_decision in graph/writer.py for the #788
+                # measurement behind this (1.8x relationships at temperature 0).
+                source=EpisodeType.text,
             )
         except Exception:
             logger.warning(
