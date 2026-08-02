@@ -293,6 +293,7 @@ async def ingest_commit(sha: str, repo: str, repo_id: str, stats: IngestStats,
                     d, modules=modules, commit_sha=sha,
                     source="watcher", repo_root=repo_id, commit_time=when,
                     entity_types={"Symbol": SymbolEntityType},
+                    searchable_rationale=True,  # #803 council default
                 )
                 stats.decisions += 1
         except Exception:

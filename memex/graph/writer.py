@@ -798,6 +798,7 @@ async def write_decision(
     repo_root: str | None = None,
     commit_time: datetime | None = None,
     entity_types: dict | None = None,
+    searchable_rationale: bool = False,
 ) -> None:
     """
     Writes a technical decision to Graphiti, plus its MOTIVATES edges to the
@@ -968,12 +969,15 @@ async def write_decision(
 
     # Board #803 (council default): write a SEARCHABLE RELATES_TO twin of the
     # MOTIVATES edges so the rationale is findable (graphiti search only
-    # traverses RELATES_TO). No-op if the structured MERGE above failed — the
-    # shadow MATCHes the Decision node by uuid, so a missing node writes nothing.
-    await _write_motivates_shadow(
-        client, decision_uuid, decision, modules or [], repo_root, now,
-        config.unified_group_id,
-    )
+    # traverses RELATES_TO). OPT-IN (like versioned=/entity_types=): the #787
+    # ingest passes searchable_rationale=True; the live watcher leaves it False
+    # so its call pattern (and every existing test) is unchanged. No-op if the
+    # structured MERGE above failed — the shadow MATCHes the Decision by uuid.
+    if searchable_rationale:
+        await _write_motivates_shadow(
+            client, decision_uuid, decision, modules or [], repo_root, now,
+            config.unified_group_id,
+        )
 
 
 # ---------------------------------------------------------------------------
