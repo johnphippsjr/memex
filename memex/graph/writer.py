@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 import uuid as uuid_module
 from datetime import datetime, UTC
 from pydantic import ValidationError
@@ -10,6 +11,13 @@ from memex.graph.schema import SymbolNode, DecisionNode, Dependency
 from memex.extractor.treesitter import SymbolDelta
 
 logger = logging.getLogger(__name__)
+
+# Board #807: FalkorDB stores embeddings via its vecf32() function; Neo4j has no
+# vecf32() and stores a plain float list. GRAPH_BACKEND is a static env var set
+# before the process starts, so reading it at import is safe and avoids a
+# config-validation side effect here. _EMB_OPEN/_EMB_CLOSE wrap the embedding
+# param: `vecf32($x)` on FalkorDB (default), plain `$x` on Neo4j.
+_EMB_OPEN, _EMB_CLOSE = ("", "") if os.getenv("GRAPH_BACKEND") == "neo4j" else ("vecf32(", ")")
 
 #: Fixed namespace for Decision identity (council fix 2). Any constant UUID
 #: works here — it only has to be stable across processes/runs so that
@@ -109,7 +117,7 @@ SET s:Symbol
 #: down. Kept as two constants rather than string interpolation so a bad param
 #: can never smuggle Cypher into the statement.
 _SYMBOL_MERGE_QUERY_EMBEDDED = _SYMBOL_MERGE_QUERY + (
-    ", s.name_embedding = vecf32($name_embedding)"
+    ", s.name_embedding = " + _EMB_OPEN + "$name_embedding" + _EMB_CLOSE
 )
 
 
@@ -225,7 +233,7 @@ MERGE (v:Entity {name: $name, file: $file, repo_path: $repo, valid_from: $now})
 SET v:Symbol
 """
 _SYMBOL_VERSION_MERGE_QUERY_EMBEDDED = _SYMBOL_VERSION_MERGE_QUERY + (
-    ", v.name_embedding = vecf32($name_embedding)"
+    ", v.name_embedding = " + _EMB_OPEN + "$name_embedding" + _EMB_CLOSE
 )
 
 
@@ -350,7 +358,7 @@ SET s:Symbol,
     s.source_commit = $commit, s.last_reinforced_at = $now, s.summary = $summary
 """
 _BITEMPORAL_NODE_QUERY_EMBEDDED = _BITEMPORAL_NODE_QUERY + (
-    ", s.name_embedding = vecf32($name_embedding)"
+    ", s.name_embedding = " + _EMB_OPEN + "$name_embedding" + _EMB_CLOSE
 )
 
 #: INTRODUCED_IN points at the symbol's OWN introduced_commit (set once, ON
@@ -980,7 +988,7 @@ SET r.fact = $fact, r.valid_at = $now
 #: shape as _SYMBOL_MERGE_QUERY_EMBEDDED. (An earlier version appended after an
 #: ``ON MATCH SET`` and so only embedded on re-write; verified/fixed live #803.)
 _MOTIVATES_SHADOW_QUERY_EMBEDDED = _MOTIVATES_SHADOW_QUERY + (
-    ", r.fact_embedding = vecf32($fact_embedding)"
+    ", r.fact_embedding = " + _EMB_OPEN + "$fact_embedding" + _EMB_CLOSE
 )
 
 
