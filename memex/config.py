@@ -145,8 +145,21 @@ class RetrievalConfig(BaseModel):
 
 
 class Config(BaseModel):
+    # --- Graph backend selector (board #807: memex -> neo4j-lab) ---
+    # "falkordb" (default, unchanged) uses the CompatFalkorDriver shim; "neo4j"
+    # uses graphiti-core's native Neo4jDriver. memex's ~60 structured call sites
+    # are natively Neo4j-shaped (CompatFalkorDriver exists to make FalkorDB
+    # emulate Neo4j), so the Neo4j path needs NO call-site changes — see
+    # graph/client.py.
+    graph_backend: str = "falkordb"   # "falkordb" | "neo4j"
+    neo4j_uri: Optional[str] = None   # e.g. bolt://neo4j.graphiti-lab.svc.cluster.local:7687
+    neo4j_user: str = "neo4j"
+    neo4j_password: Optional[str] = None
+    neo4j_database: str = "neo4j"
+
     # --- FalkorDB backend (replaces Neo4j — v0.7.0 fork: falkordb-litellm) ---
-    falkor_host: str
+    # Optional so a graph_backend=neo4j deployment need not set FALKOR_HOST.
+    falkor_host: Optional[str] = None
     falkor_port: int = 6379
     # 🚨 This value doubles as the Graphiti `group_id` partition threaded
     # through every `add_episode()` call (see graph/writer.py). graphiti-core
@@ -279,6 +292,11 @@ def load_config(repo_root: Optional[str] = None) -> Config:
     """
     # Base configuration from environment variables
     env_config = {
+        "graph_backend": os.getenv("GRAPH_BACKEND"),
+        "neo4j_uri": os.getenv("NEO4J_URI"),
+        "neo4j_user": os.getenv("NEO4J_USER"),
+        "neo4j_password": os.getenv("NEO4J_PASSWORD"),
+        "neo4j_database": os.getenv("NEO4J_DATABASE"),
         "falkor_host": os.getenv("FALKOR_HOST"),
         "falkor_port": os.getenv("FALKOR_PORT"),
         "falkor_graph": os.getenv("FALKOR_GRAPH"),
@@ -336,7 +354,11 @@ def load_config(repo_root: Optional[str] = None) -> Config:
         return Config(**config_dict)
     except Exception as e:
         # Re-raise with a more helpful message if required fields are missing.
-        required_vars = ["FALKOR_HOST", "LITELLM_BASE_URL", "LITELLM_API_KEY", "LITELLM_MODEL"]
+        backend = config_dict.get("graph_backend", "falkordb")
+        if backend == "neo4j":
+            required_vars = ["NEO4J_URI", "LITELLM_BASE_URL", "LITELLM_API_KEY", "LITELLM_MODEL"]
+        else:
+            required_vars = ["FALKOR_HOST", "LITELLM_BASE_URL", "LITELLM_API_KEY", "LITELLM_MODEL"]
         missing = [v for v in required_vars if v.lower() not in config_dict]
         if missing:
             # Introspection-only mode: allow the server to start without a live

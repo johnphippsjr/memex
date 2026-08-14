@@ -243,17 +243,33 @@ class GraphClient:
             # driver below runs its first search.
             apply_all_patches()
 
-            # FalkorDB graph driver. `database` is the FalkorDB graph key —
-            # this MUST match config.unified_group_id (see config.py comment
-            # on falkor_graph) so every add_episode() call's explicit
-            # group_id equals the driver's already-configured database and
-            # graphiti-core never triggers its silent
-            # `self.driver.clone(database=group_id)` re-point.
-            falkor_driver = CompatFalkorDriver(
-                host=config.falkor_host,
-                port=config.falkor_port,
-                database=config.falkor_graph,
-            )
+            # Graph backend (board #807): FalkorDB (default) via the
+            # CompatFalkorDriver shim, or Neo4j via graphiti-core's native
+            # Neo4jDriver (built internally when Graphiti() is given
+            # uri/user/password and no graph_driver). memex's ~60 structured
+            # call sites are Neo4j-shaped either way, so no call-site changes.
+            if config.graph_backend == "neo4j":
+                backend_kwargs = dict(
+                    uri=config.neo4j_uri,
+                    user=config.neo4j_user,
+                    password=config.neo4j_password,
+                )
+                backend_desc = f"Neo4j {config.neo4j_uri} db={config.neo4j_database}"
+            else:
+                # `database` is the FalkorDB graph key — this MUST match
+                # config.unified_group_id (see config.py comment on
+                # falkor_graph) so every add_episode()'s explicit group_id
+                # equals the driver's configured database and graphiti-core
+                # never triggers its silent `self.driver.clone(database=
+                # group_id)` re-point.
+                backend_kwargs = dict(
+                    graph_driver=CompatFalkorDriver(
+                        host=config.falkor_host,
+                        port=config.falkor_port,
+                        database=config.falkor_graph,
+                    )
+                )
+                backend_desc = f"FalkorDB {config.falkor_host}:{config.falkor_port}/{config.falkor_graph}"
 
             # Configure LLM Client — LiteLLM gateway, OpenAI-compatible.
             #
@@ -336,22 +352,19 @@ class GraphClient:
             )
             cross_encoder = OpenAIRerankerClient(config=reranker_config)
 
-            # Initialize Graphiti. `graph_driver=` (not `uri=`) is required
-            # for a non-Neo4j backend — passing `uri="falkor://..."` is NOT
-            # supported by graphiti-core 0.29.x's Graphiti.__init__: when
-            # graph_driver is None it unconditionally builds a Neo4jDriver
-            # from uri/user/password (see graphiti_core/graphiti.py).
+            # Initialize Graphiti. For FalkorDB, graph_driver= is required
+            # (graphiti-core 0.29.x builds a Neo4jDriver from uri/user/password
+            # only when graph_driver is None). For Neo4j we pass uri/user/
+            # password and let graphiti-core build its native Neo4jDriver.
             cls._instance = Graphiti(
-                graph_driver=falkor_driver,
                 llm_client=llm_client,
                 embedder=embedder,
                 cross_encoder=cross_encoder,
+                **backend_kwargs,
             )
             logger.info(
-                "Graphiti client initialized (FalkorDB %s:%s/%s, LiteLLM model %s, structured_output_mode=%s)",
-                config.falkor_host,
-                config.falkor_port,
-                config.falkor_graph,
+                "Graphiti client initialized (%s, LiteLLM model %s, structured_output_mode=%s)",
+                backend_desc,
                 config.litellm_model,
                 config.llm_structured_output_mode,
             )
