@@ -32,13 +32,17 @@ def test_episode_uuid_varies_by_repo_and_commit():
     assert deterministic_episode_uuid("repoX", "def456", "decision_def456") != base
 
 
-def test_graphiti_accepts_uuid_kwarg():
-    """HARD PRECONDITION. If this is False in the image, add_episode cannot be told
-    which uuid to use, replayability is impossible, and a decisions re-ingest that
-    resets the checkpoint WILL duplicate every episode. Do not re-ingest until green."""
-    assert ADD_EPISODE_ACCEPTS_UUID, (
-        "installed graphiti_core.Graphiti.add_episode has no `uuid` parameter - "
-        "replayable episode ids are UNAVAILABLE; a decisions re-ingest is unsafe"
+def test_deterministic_uuid_is_not_passed_to_add_episode():
+    """BOARD #1046: the #1038 replayability idea was WITHDRAWN - graphiti's add_episode(uuid=X)
+    is an UPDATE path (get_by_uuid, raises NodeNotFoundError for a new X), so passing a fresh
+    deterministic uuid broke EVERY decision write. write_decision must NOT pass `uuid` to
+    add_episode. Guard against a well-meaning re-wire by asserting the source no longer does."""
+    import inspect
+    from memex.graph import writer
+    src = inspect.getsource(writer.write_decision)
+    assert "uuid" not in src.split("add_episode")[1].split(")")[0], (
+        "write_decision passes uuid= to add_episode again - that raises NodeNotFoundError "
+        "for every new episode (board #1046). Idempotency comes from the checkpoint, not a uuid."
     )
 
 

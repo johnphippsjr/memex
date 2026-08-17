@@ -14,15 +14,15 @@ from memex.extractor.treesitter import SymbolDelta, EXTRACTOR_VERSION
 
 logger = logging.getLogger(__name__)
 
-# BOARD #1038 - REPLAYABLE EPISODE IDENTITY (the council's single hard precondition
-# before any re-ingest touches the graph). graphiti's add_episode mints a RANDOM
-# uuid4 for the :Episodic node by default, so re-running a commit after a checkpoint
-# reset creates a DUPLICATE :Episodic node every time - which the chair called "the
-# single change that separates safe salvage from corrupting the crown jewels."
-# Deriving the uuid from (repo, commit, episode_name) makes a re-run MERGE onto the
-# same node. We detect whether the INSTALLED graphiti-core actually accepts a `uuid`
-# kwarg rather than assuming it: if it does not, replayability is NOT available and
-# a decisions re-ingest is NOT safe, so callers must check this and refuse.
+# BOARD #1046 - the #1038 "replayable episode identity" idea was WITHDRAWN. It was built on a
+# wrong reading of graphiti's API: add_episode(uuid=X) is an UPDATE path -
+# it does `EpisodicNode.get_by_uuid(X)` (graphiti.py:1100) and RAISES NodeNotFoundError when X
+# is new. So passing a fresh deterministic uuid does not "MERGE onto the same node", it makes
+# EVERY add_episode fail (proven live on the #1046 fleet ingest: 0 episodes landed until this
+# was reverted). Idempotency for a re-ingest therefore comes from the CHECKPOINT, as originally
+# designed - do not reset a checkpoint without also wiping the episodes for those commits.
+# ADD_EPISODE_ACCEPTS_UUID / deterministic_episode_uuid are kept only so ingest_v3.py's import
+# does not break; NEITHER is used to pass a uuid to add_episode any more. Do not re-wire them.
 _EPISODE_UUID_NAMESPACE = uuid_module.uuid5(
     uuid_module.NAMESPACE_URL, "https://github.com/johnphippsjr/memex/episode"
 )
@@ -30,20 +30,12 @@ try:
     ADD_EPISODE_ACCEPTS_UUID = "uuid" in inspect.signature(Graphiti.add_episode).parameters
 except (ValueError, TypeError):  # pragma: no cover - signature introspection guard
     ADD_EPISODE_ACCEPTS_UUID = False
-if not ADD_EPISODE_ACCEPTS_UUID:
-    logger.warning(
-        "graphiti_core.Graphiti.add_episode does NOT accept a `uuid` kwarg in this "
-        "install - REPLAYABLE EPISODE IDS ARE UNAVAILABLE. A decisions re-ingest that "
-        "resets the checkpoint would DUPLICATE every :Episodic node. Board #1038: do "
-        "not run a full re-ingest with decisions until this is resolved."
-    )
 
 
 def deterministic_episode_uuid(repo_root, commit_sha: str, episode_name: str) -> str:
-    """Replayable :Episodic uuid derived from (repo, commit, episode_name) (board
-    #1038). Pass as add_episode(..., uuid=deterministic_episode_uuid(...)) so a
-    re-run of the same commit lands on the SAME node instead of forking a duplicate.
-    Stable across processes and runs, exactly like _DECISION_UUID_NAMESPACE."""
+    """DEPRECATED (board #1046): kept only for import compatibility. Do NOT pass the result to
+    add_episode(uuid=...) - that is an UPDATE path (get_by_uuid) which raises NodeNotFoundError
+    for a new uuid, breaking every episode write. See the module note above."""
     return str(uuid_module.uuid5(
         _EPISODE_UUID_NAMESPACE, f"{repo_root or ''}|{commit_sha}|{episode_name}"
     ))
@@ -1231,14 +1223,14 @@ async def write_decision(
 
     episode_name = f"decision_{commit_sha[:8]}"
 
-    # Board #1038: replayable episode identity so a re-ingest MERGEs onto the SAME
-    # :Episodic node instead of forking a duplicate. Only passed when the installed
-    # graphiti accepts a `uuid` kwarg (ADD_EPISODE_ACCEPTS_UUID, checked at import);
-    # otherwise fall back to graphiti's random uuid unchanged - replayability is
-    # simply unavailable, and that was warned loudly at import.
+    # BOARD #1046 REVERT: do NOT pass a deterministic uuid to add_episode. graphiti's
+    # add_episode(uuid=X) does EpisodicNode.get_by_uuid(X) (graphiti.py:1100) and RAISES
+    # NodeNotFoundError if X does not already exist - it is an UPDATE path, not
+    # create-with-uuid. Passing a fresh deterministic uuid made EVERY add_episode fail, so no
+    # episode landed (proven live on the #1046 fleet ingest). The #1038 "replayable episode id"
+    # precondition was built on a wrong reading of the API. Idempotency comes from the caller's
+    # checkpoint; do not reset a checkpoint without also wiping the episodes for those commits.
     _episode_kwargs = {}
-    if ADD_EPISODE_ACCEPTS_UUID:
-        _episode_kwargs["uuid"] = deterministic_episode_uuid(repo_root, commit_sha, episode_name)
     if entity_types:
         _episode_kwargs["entity_types"] = entity_types
 
