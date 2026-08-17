@@ -148,6 +148,9 @@ def get_symbols_from_content(content: str, file_path: str, language_name: str) -
         )
         return symbols
 
+    # Board #1038: symbols we could not name, kept so the loss is countable rather than silent.
+    skipped_unnameable: list = []
+
     for item in _flatten_structure(result.structure):
         # Map tree-sitter kinds to our simple kinds
         kind_str = str(item.kind).lower()
@@ -165,14 +168,59 @@ def get_symbols_from_content(content: str, file_path: str, language_name: str) -
         line_idx = item.span.start_line
         signature = lines[line_idx].strip() if line_idx < len(lines) else item.name
 
-        s = Symbol(
-            name=item.name,
-            kind=kind,
-            signature=signature,
-            file=file_path,
-            line=item.span.start_line + 1 # 1-indexed
-        )
+        # BOARD #1038 - PER-ITEM ISOLATION. Before this, ONE un-nameable symbol destroyed the
+        # WHOLE FILE. item.name is None for anonymous JS/TS constructs (arrow functions bound to
+        # a const, `export default function () {}`, `export default class {}`); Symbol.name is a
+        # required str, so pydantic raised here, the exception escaped this function AND
+        # extract_symbol_delta(), and ingest_history.py caught it, logged a WARNING, and threw
+        # away every symbol in the file.
+        #
+        # MEASURED COST of that design: smokesignals-web ingested 4,773 files and wrote 142
+        # symbols with 0 call edges across 734 discarded files - and still exited "Complete".
+        #
+        # A nameless symbol must now cost AT MOST ITSELF. Note this is deliberately NOT the fix
+        # for anonymous naming: the council rejected silent-skip-as-the-answer, because ~90% of a
+        # React codebase's functions are nameless arrows bound to consts and skipping them would
+        # ship near-total loss reported as success. The real fix is the upstream tree-sitter
+        # tags.scm queries, which resolve `const foo = () => {}` to "foo" via
+        #   (variable_declarator value: [(arrow_function) (function_expression)]) @definition.function
+        # This block is the SAFETY NET underneath that, and it protects every language - including
+        # ones nobody has measured yet. Keep it even after tags.scm lands.
+        #
+        # skipped_unnameable is returned to the caller so this can never be silent again: a file
+        # that drops symbols must be able to mark its commit unclean rather than look successful.
+        if item.name is None:
+            skipped_unnameable.append((file_path, item.span.start_line + 1, kind))
+            continue
+
+        try:
+            s = Symbol(
+                name=item.name,
+                kind=kind,
+                signature=signature,
+                file=file_path,
+                line=item.span.start_line + 1 # 1-indexed
+            )
+        except Exception:  # noqa: BLE001 - one bad symbol must not cost the file
+            logger.warning(
+                "symbol construction failed for %s in %s (kind=%s, line=%s); skipping THIS "
+                "symbol only - the rest of the file is still indexed",
+                item.name, file_path, kind, item.span.start_line + 1, exc_info=True,
+            )
+            skipped_unnameable.append((file_path, item.span.start_line + 1, kind))
+            continue
+
         symbols[f"{item.name}:{kind}"] = s
+
+    if skipped_unnameable:
+        # Loud enough to be greppable and countable, per-file, with a number. The old code
+        # logged one line per DISCARDED FILE, which read like noise; this reports what was
+        # actually lost against what was kept.
+        logger.warning(
+            "%s: skipped %d un-nameable symbol(s), kept %d - lines %s",
+            file_path, len(skipped_unnameable), len(symbols),
+            ",".join(str(l) for _, l, _ in skipped_unnameable[:10]),
+        )
 
     return symbols
 
