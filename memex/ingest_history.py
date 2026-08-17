@@ -60,7 +60,22 @@ LIVE_GRAPH_DENYLIST = {"mem0-seed-local-verify", "graphiti-mcp-live"}
 # Extension -> ("code" | "k8s"). Anything unmapped is still counted but produces
 # no structural nodes (mirrors extract_symbol_delta's own honesty contract:
 # an unmapped file yields nothing rather than a wrong guess).
-_CODE_EXTS = {"py", "js", "ts", "rs", "go"}
+# BOARD #1038 - THE SECOND EXTENSION GATE, and the one that actually mattered.
+#
+# This set is checked at the top of the per-file loop below; anything not in it is
+# `continue`d BEFORE extract_symbol_delta is ever called. So fixing the extractor's
+# own lang_map (memex/extractor/treesitter.py) was NOT enough on its own - a .tsx
+# file never reached the extractor to begin with.
+#
+# MEASURED on smokesignals-web: 320 of 775 source files are .tsx, and coverage was
+# 29/775 = 3.7% with tsx at 0/320. Both this set and the extractor's map had to gain
+# the same extensions; fixing one and not the other looks like a working fix and
+# silently changes nothing.
+#
+# NOTE for whoever audits this next: the round-2 council said the second map to fix
+# was in memex/watcher/handlers.py. It is NOT - that one feeds extract_calls (call
+# edges), which is Python-only by design. THIS is the second gate.
+_CODE_EXTS = {"py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "rs", "go"}
 _K8S_EXTS = {"yaml", "yml"}
 
 
@@ -253,9 +268,35 @@ class IngestStats:
     decisions: int = 0
     files_seen: int = 0
     errors: int = 0
+    # BOARD #1038: per-extension coverage. The whole failure was invisible because
+    # the only numbers on offer were TOTALS - 4,773 files_seen and 142
+    # symbols_written looks bad only if you already suspect something. Broken down
+    # per extension it is unmissable: ts had thousands of files and wrote nothing.
+    files_by_ext: dict = field(default_factory=dict)
+    symbols_by_ext: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
+
+    def hollow_extensions(self, min_files: int = 5) -> List[str]:
+        """Extensions that had real work to do and produced NOTHING.
+
+        This is the check that would have caught #1038 on the first progress line
+        instead of 13 hours later. Deliberately NOT "symbols == 0 is a failure":
+          * K8S/YAML is excluded - it flows through the resource extractor, and
+            zero code symbols there is CORRECT.
+          * min_files guards the honest small case: one .js file with no functions
+            in it is not a defect. A LANGUAGE with many files and zero symbols is.
+        Returns the offending extensions so the caller can name them, rather than
+        a bare bool nobody can act on.
+        """
+        bad = []
+        for ext, n_files in sorted(self.files_by_ext.items()):
+            if ext not in _CODE_EXTS:
+                continue
+            if n_files >= min_files and self.symbols_by_ext.get(ext, 0) == 0:
+                bad.append(ext)
+        return bad
 
 
 async def ingest_commit(sha: str, repo: str, repo_id: str, stats: IngestStats,
@@ -279,6 +320,9 @@ async def ingest_commit(sha: str, repo: str, repo_id: str, stats: IngestStats,
         ext = _ext(cf.path)
         if ext not in _CODE_EXTS and ext not in _K8S_EXTS:
             continue
+        # #1038: count per extension so a language that produces nothing is visible
+        # in the progress line itself, not only in a post-hoc graph query.
+        stats.files_by_ext[ext] = stats.files_by_ext.get(ext, 0) + 1
 
         old_ref_path = cf.old_path or cf.path
         parent = _parent(repo, sha)
@@ -301,7 +345,9 @@ async def ingest_commit(sha: str, repo: str, repo_id: str, stats: IngestStats,
                 delta, source_commit=sha, repo_root=repo_id,
                 commit_time=when, bitemporal=True, renames=renames,
             )
-            stats.symbols_written += (summary or {}).get("symbols", 0)
+            _n_syms = (summary or {}).get("symbols", 0)
+            stats.symbols_written += _n_syms
+            stats.symbols_by_ext[ext] = stats.symbols_by_ext.get(ext, 0) + _n_syms
         except Exception:
             stats.errors += 1
             logger.warning("symbol delta failed for %s @ %s", cf.path, sha[:8], exc_info=True)
@@ -420,6 +466,29 @@ def main(argv: Optional[List[str]] = None) -> None:
         allow_live=args.allow_live,
     ))
     print(json.dumps(stats.as_dict(), indent=2))
+
+    # BOARD #1038 - FAIL LOUDLY ON A HOLLOW RUN.
+    #
+    # This is the single change that would have caught the original defect. The
+    # 2026-08-16 smokesignals-web run saw 4,773 files, wrote 142 symbols with 0
+    # call edges across 734 discarded files, and EXITED 0 - so every watcher,
+    # dashboard and human read it as success. An ingest that had thousands of
+    # files of a language and produced no symbols for it has not succeeded; it has
+    # failed quietly, which is worse than failing.
+    #
+    # Exit 3 (not 1) so it is distinguishable from an ordinary crash in job logs.
+    hollow = stats.hollow_extensions()
+    if hollow:
+        detail = ", ".join(
+            "%s: %d files -> 0 symbols" % (e, stats.files_by_ext.get(e, 0)) for e in hollow
+        )
+        logger.error(
+            "HOLLOW INGEST - extensions produced no symbols despite having files (%s). "
+            "The graph for those languages is empty. This is a FAILURE, not a warning: "
+            "see board #1038, where exactly this exited 0 and went unnoticed for a day.",
+            detail,
+        )
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":
