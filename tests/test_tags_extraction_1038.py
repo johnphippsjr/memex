@@ -11,6 +11,7 @@ import pytest
 from memex.extractor.treesitter import (
     get_symbols_from_content,
     extract_symbol_delta,
+    extract_calls,
     _TAG_QUERIES,
 )
 
@@ -101,3 +102,48 @@ def test_new_extensions_reach_the_extractor(path, expect):
     delta = asyncio.run(extract_symbol_delta(path, "", src))
     names = {s.name for s in delta.added}
     assert expect in names, "%s did not reach the extractor (unmapped extension)" % path
+
+
+# --- board #1038 signature-span fix -----------------------------------------
+
+def test_signature_captures_full_multiline_declaration():
+    """The old rule took only the name's FIRST PHYSICAL LINE, so a multi-line
+    declaration collapsed to a useless 'function bigFn('. The span rule must carry
+    the whole header up to the body."""
+    src = "function bigFn(\n  a,\n  b,\n  c,\n) {\n  return a + b + c;\n}\n"
+    syms = get_symbols_from_content(src, "src/m.ts", "typescript")
+    sig = syms["bigFn:fn"].signature
+    assert sig != "function bigFn(", "signature is still just the first physical line"
+    for tok in ("bigFn", "a", "b", "c"):
+        assert tok in sig, "%r missing from multi-line signature %r" % (tok, sig)
+
+
+def test_signature_stops_at_body_not_inside_it():
+    """A class signature must be the header, not the whole body text."""
+    src = "class Widget {\n  render() { return 1; }\n}\n"
+    syms = get_symbols_from_content(src, "src/w.tsx", "tsx")
+    assert syms["Widget:class"].signature == "class Widget"
+
+
+# --- board #1038 JS/TS call edges -------------------------------------------
+
+def test_js_ts_call_edges_resolve_arrow_bound_caller():
+    """extract_calls was Python-only. It must now resolve calls made INSIDE an
+    arrow function bound to a const — the caller tslp.process() could not name."""
+    src = ("function helper(x){ return x + 1; }\n"
+           "const doWork = (n) => { const r = helper(n); return fmt(r); };\n")
+    pairs = {(e.caller, e.callee) for e in extract_calls("src/a.ts", src, language="typescript")}
+    assert ("doWork", "helper") in pairs
+    assert ("doWork", "fmt") in pairs
+
+
+def test_module_level_call_fabricates_no_caller():
+    """A call at module scope has no enclosing function; we must not invent one."""
+    edges = extract_calls("src/b.js", "sideEffect();\n", language="javascript")
+    assert edges == []
+
+
+def test_call_query_language_with_no_query_returns_empty():
+    """rust/go extract symbols but have no call query — they must return [] cleanly,
+    which is correct (not hollow), never an error."""
+    assert extract_calls("src/x.rs", "fn main(){ foo(); }", language="rust") == []

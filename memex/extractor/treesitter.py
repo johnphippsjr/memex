@@ -8,6 +8,30 @@ from memex.graph.schema import Symbol
 
 logger = logging.getLogger(__name__)
 
+# BOARD #1038 - a version stamp on every symbol the tags-query extractor writes.
+#
+# WHY: the live neo4j graph mixes two eras of symbol - the hollow-era nodes the
+# OLD extractor wrote (missing 41% of files; anonymous JS/TS bound to a const came
+# back name=None and killed the whole file; the tslp path sometimes wrote a
+# function's FIRST PARAMETER as its name, e.g. `const f = (x) => x` -> a node named
+# "x") and the correct nodes THIS extractor writes. Re-ingesting over the same
+# commits MERGE-matches and refreshes the ones whose identity is unchanged and ADDS
+# the previously-missing ones, but a node the old extractor wrote under a WRONG name
+# (a parameter name) will never be matched by the new pass - it lingers as an
+# orphan. Stamping extractor_version lets a deliberate reconciliation pass find
+# those stale-version nodes and supersede them (writer.reconcile_superseded_symbols),
+# instead of leaving wrong data mixed with right. Bump this string whenever the
+# extractor's OUTPUT SHAPE changes (new captures, changed signature rule, a bug fix
+# that renames symbols) so the reconciliation has a clean before/after boundary.
+EXTRACTOR_VERSION = "1038-tags-v1"
+
+# body-opening node types, per grammar, used to end a symbol's SIGNATURE at the
+# start of its body so a multi-line declaration header is captured in full instead
+# of just its first physical line (board #1038 signature-span fix).
+_BODY_NODE_TYPES = {
+    "statement_block", "class_body", "function_body", "object", "block",
+}
+
 # ---------------------------------------------------------------------------
 # BOARD #1038 - tags-query symbol extraction (replaces the tslp process() path
 # for JS/TS/TSX/JSX, which could not see a function's name at all).
@@ -97,13 +121,36 @@ class CallEdge:
     line: int
 
 
-# tree-sitter call-expression queries, per language. Captures the *callee*
-# name (the simple identifier, or the trailing attribute of `a.b.c()`).
-# v0.3.7 Layer 2 ships Python only — memex's own codebase is Python and the
-# grammars differ per language; others fall through to [] (no edges, no error).
+# tree-sitter call-expression queries, per language. Captures the *callee* name
+# (the simple identifier, or the trailing attribute/property of `a.b.c()`).
+#
+# BOARD #1038: JS/TS/TSX added. They were Python-only before, which the council
+# affirmed was CORRECT-by-design at the time (0 call edges on a JS repo was not a
+# bug) - but it left predict_impact blind to the call structure of the estate's
+# JS/TS frontends. Enabling them is safe because writer.write_call_edges resolves
+# CONSERVATIVELY: a callee becomes an edge only when it maps to exactly ONE Symbol
+# node in the repo (size(cs)=1), so an ambiguous or unresolved callee yields NO
+# edge rather than a wrong one. The JS/TS callee shapes are `foo()` (identifier)
+# and `a.b()` (member_expression property).
+_JS_CALL_QUERY = (
+    "(call_expression function: (identifier) @callee)"
+    "(call_expression function: (member_expression property: (property_identifier) @callee))"
+)
 _CALL_QUERIES: Dict[str, str] = {
     "python": "(call function: [(identifier) @callee "
               "(attribute attribute: (identifier) @callee)])",
+    "javascript": _JS_CALL_QUERY,
+    "typescript": _JS_CALL_QUERY,
+    "tsx": _JS_CALL_QUERY,
+}
+
+# Pre-compiled ONCE at import, exactly like _TAG_QUERIES and for the same reason:
+# tree_sitter 0.26.0 poisons a query text for the process lifetime if a compile
+# fails, so no query is compiled at call time. A broken call query stops the
+# process here, loudly, instead of silently degrading to zero edges mid-ingest.
+_CALL_QUERY_OBJS: Dict[str, "ts.Query"] = {
+    _lang: ts.Query(tslp.get_language(_lang), _src)
+    for _lang, _src in _CALL_QUERIES.items()
 }
 
 
@@ -118,6 +165,37 @@ def _flatten_functions(items, acc: List[Tuple[str, int, int]]) -> None:
             _flatten_functions(it.children, acc)
 
 
+def _function_spans_from_tags(content: str, language_name: str) -> List[Tuple[str, int, int]]:
+    """(name, start_line, end_line) for every NAMED function/method definition,
+    via the tags query (board #1038).
+
+    Used for JS/TS/TSX caller resolution in extract_calls. tslp.process() cannot be
+    used here for the same root reason it failed for symbols: it returns name=None
+    for a function bound to a const, so the caller of a call inside `const handler =
+    () => { foo() }` would be unresolvable. The tags query names it "handler".
+    """
+    query = _TAG_QUERIES[language_name]
+    lang = tslp.get_language(language_name)
+    raw = content.encode("utf-8", errors="ignore")
+    parser = ts.Parser(lang)
+    tree = parser.parse(raw)
+    spans: List[Tuple[str, int, int]] = []
+    for _pattern_index, caps in ts.QueryCursor(query).matches(tree.root_node):
+        role = next((c for c in caps if c.startswith("definition.")), None)
+        if role is None or _ROLE_TO_KIND.get(role.split(".", 1)[1]) != "fn":
+            continue  # only function/method definitions can be callers
+        name_nodes = caps.get("name")
+        def_nodes = caps.get(role)
+        if not name_nodes or not def_nodes:
+            continue
+        nm = raw[name_nodes[0].start_byte:name_nodes[0].end_byte].decode("utf-8", errors="ignore")
+        if not nm:
+            continue
+        d = def_nodes[0]
+        spans.append((nm, d.start_point[0], d.end_point[0]))
+    return spans
+
+
 def extract_calls(file_path: str, content: str, language: str = "python") -> List[CallEdge]:
     """Extract intra-file call-sites and map each to its enclosing function.
 
@@ -125,27 +203,28 @@ def extract_calls(file_path: str, content: str, language: str = "python") -> Lis
     module scope (no enclosing function) are skipped — we don't fabricate a
     caller. Unsupported languages return ``[]``.
     """
-    query_src = _CALL_QUERIES.get(language)
-    if not query_src or not content:
+    query = _CALL_QUERY_OBJS.get(language)
+    if query is None or not content:
         return []
 
     try:
-        import tree_sitter as ts
         lang = tslp.get_language(language)
         parser = ts.Parser(lang)
         tree = parser.parse(content.encode("utf-8", errors="ignore"))
-        query = ts.Query(lang, query_src)
-        cursor = ts.QueryCursor(query)
-        captures = cursor.captures(tree.root_node)
+        captures = ts.QueryCursor(query).captures(tree.root_node)
     except Exception:
         logger.debug("call extraction failed for %s", file_path, exc_info=True)
         return []
 
-    # Enclosing-function spans (0-indexed) for caller resolution.
+    # Enclosing-function spans (0-indexed) for caller resolution. JS/TS/TSX resolve
+    # via the tags query (which names arrow-bound functions); Python via tslp.process.
     try:
-        result = tslp.process(content, config=tslp.ProcessConfig(language=language))
-        functions: List[Tuple[str, int, int]] = []
-        _flatten_functions(result.structure, functions)
+        if language in _TAG_QUERIES:
+            functions: List[Tuple[str, int, int]] = _function_spans_from_tags(content, language)
+        else:
+            result = tslp.process(content, config=tslp.ProcessConfig(language=language))
+            functions = []
+            _flatten_functions(result.structure, functions)
     except Exception:
         return []
 
@@ -193,6 +272,49 @@ def _flatten_structure(items) -> list:
         if it.children:
             acc.extend(_flatten_structure(it.children))
     return acc
+
+
+def _signature_from_def(def_node, raw: bytes, fallback: str, max_len: int = 300) -> str:
+    """Full declaration header of a definition, collapsed to one line (board #1038).
+
+    The previous rule took only the FIRST PHYSICAL LINE the name sat on, so a
+    multi-line declaration
+        function foo(
+          a, b,
+        ) { ... }
+    produced the signature "function foo(" - useless to read and useless as a
+    change-detection key. This walks from the definition node's start to the start
+    of its BODY (statement_block/class_body/...) so the whole header is captured,
+    then collapses interior whitespace and caps the length. Expression-bodied
+    arrows (no block) keep their whole short form.
+
+    NOTE: signature feeds extract_symbol_delta's modified-detection (a changed
+    signature = a "modified" symbol), so changing this rule re-stamps every symbol
+    on the next ingest. That is why it ships behind an EXTRACTOR_VERSION bump - the
+    churn is intentional and versioned, not a silent repo-wide fake refactor.
+    """
+    if def_node is None:
+        return fallback
+    cut = def_node.end_byte
+    # The body opener can be nested (an arrow function's block body lives under the
+    # value, not as a direct child), so search the subtree and cut at the EARLIEST
+    # body opener - which is the symbol's own body in the common case.
+    best = None
+    stack = list(def_node.children)
+    while stack:
+        ch = stack.pop()
+        if ch.type in _BODY_NODE_TYPES:
+            if best is None or ch.start_byte < best:
+                best = ch.start_byte
+            continue  # do not descend into the body itself
+        stack.extend(ch.children)
+    if best is not None and best > def_node.start_byte:
+        cut = best
+    text = raw[def_node.start_byte:cut].decode("utf-8", errors="ignore")
+    sig = " ".join(text.split())
+    if len(sig) > max_len:
+        sig = sig[:max_len].rstrip() + "…"
+    return sig or fallback
 
 
 def _symbols_from_tags_query(content: str, file_path: str, language_name: str) -> Dict[str, Symbol]:
@@ -245,7 +367,9 @@ def _symbols_from_tags_query(content: str, file_path: str, language_name: str) -
             continue
 
         line_idx = node.start_point[0]
-        signature = lines[line_idx].strip() if line_idx < len(lines) else name
+        # Board #1038: full declaration span, not just the name's physical line.
+        def_node = caps.get(role, [None])[0]
+        signature = _signature_from_def(def_node, raw, name)
         try:
             symbols[f"{name}:{kind}"] = Symbol(
                 name=name, kind=kind, signature=signature,

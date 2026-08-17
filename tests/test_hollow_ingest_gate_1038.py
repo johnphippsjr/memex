@@ -10,7 +10,9 @@ per-extension counters and no exit gate at all).
 """
 import pytest
 
-from memex.ingest_history import IngestStats, _CODE_EXTS
+from memex.ingest_history import (
+    IngestStats, _CODE_EXTS, assert_not_hollow, capability_report, LANGUAGE_CAPABILITIES,
+)
 
 
 def _stats(files_by_ext, symbols_by_ext):
@@ -62,3 +64,38 @@ def test_new_extensions_are_in_the_ingest_gate():
             "%s missing from _CODE_EXTS - those files are skipped before the "
             "extractor ever sees them" % ext
         )
+
+
+# --- the SHARED gate both runners call (the fix for the dead-code gate) ------
+
+def test_assert_not_hollow_raises_systemexit_3_on_the_real_shape():
+    """This is the gate the PRODUCTION runner (ingest_v3.py) will call. It must
+    raise SystemExit(3) - not 1 (a crash), not 0 (silent success) - so a hollow run
+    fails loudly and distinguishably."""
+    s = _stats({"ts": 367, "tsx": 320, "js": 367}, {"ts": 0, "tsx": 0, "js": 0})
+    with pytest.raises(SystemExit) as ei:
+        assert_not_hollow(s)
+    assert ei.value.code == 3
+
+
+def test_assert_not_hollow_passes_a_healthy_run():
+    s = _stats({"tsx": 320, "ts": 449}, {"tsx": 1591, "ts": 1368})
+    assert assert_not_hollow(s) == []
+
+
+def test_capability_report_flags_only_the_hollow_language():
+    """The per-language line that makes the failure unmissable. yaml is a
+    'resources' capability, so zero CODE symbols there is NOT hollow."""
+    s = _stats({"tsx": 320, "py": 40, "yaml": 100}, {"tsx": 0, "py": 745, "yaml": 0})
+    rep = capability_report(s)
+    assert rep["tsx"]["hollow"] is True
+    assert rep["py"]["hollow"] is False
+    assert rep["yaml"]["hollow"] is False
+    assert rep["yaml"]["capability"] == "resources"
+    assert rep["tsx"]["capability"] == "symbols"
+
+
+def test_capability_table_matches_the_extension_sets():
+    """The capability table must not drift from _CODE_EXTS/_K8S_EXTS."""
+    for ext in _CODE_EXTS:
+        assert LANGUAGE_CAPABILITIES[ext] == "symbols"

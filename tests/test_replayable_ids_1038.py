@@ -1,0 +1,55 @@
+"""Board #1038: the re-ingest safety preconditions the council made BLOCKING.
+
+Imports memex.graph.writer, which pulls graphiti_core, so this runs in the memex
+IMAGE (kubectl exec ... pytest), not on a bare workstation. The extractor/ingest
+suites cover what runs without graphiti_core; this covers the graph-write half.
+
+The single most important test here is test_graphiti_accepts_uuid_kwarg: the whole
+replayable-episode precondition is a no-op if the installed graphiti-core does not
+accept a `uuid` on add_episode. It must PASS in the image before any decisions
+re-ingest is allowed to reset a checkpoint.
+"""
+from memex.graph.writer import (
+    deterministic_episode_uuid,
+    EXTRACTOR_VERSION,
+    ADD_EPISODE_ACCEPTS_UUID,
+    reconcile_superseded_symbols,
+)
+
+
+def test_episode_uuid_is_deterministic():
+    """Same (repo, commit, episode_name) -> same uuid, so a re-run of a commit
+    MERGEs onto the SAME :Episodic node instead of forking a duplicate. This is the
+    property the chair called 'safe salvage vs corrupting the crown jewels'."""
+    a = deterministic_episode_uuid("repoX", "abc123", "decision_abc123")
+    b = deterministic_episode_uuid("repoX", "abc123", "decision_abc123")
+    assert a == b
+
+
+def test_episode_uuid_varies_by_repo_and_commit():
+    base = deterministic_episode_uuid("repoX", "abc123", "decision_abc123")
+    assert deterministic_episode_uuid("repoY", "abc123", "decision_abc123") != base
+    assert deterministic_episode_uuid("repoX", "def456", "decision_def456") != base
+
+
+def test_graphiti_accepts_uuid_kwarg():
+    """HARD PRECONDITION. If this is False in the image, add_episode cannot be told
+    which uuid to use, replayability is impossible, and a decisions re-ingest that
+    resets the checkpoint WILL duplicate every episode. Do not re-ingest until green."""
+    assert ADD_EPISODE_ACCEPTS_UUID, (
+        "installed graphiti_core.Graphiti.add_episode has no `uuid` parameter - "
+        "replayable episode ids are UNAVAILABLE; a decisions re-ingest is unsafe"
+    )
+
+
+def test_extractor_version_is_a_nonempty_stamp():
+    assert EXTRACTOR_VERSION and isinstance(EXTRACTOR_VERSION, str)
+
+
+def test_reconcile_defaults_to_dry_run(monkeypatch):
+    """reconcile_superseded_symbols must default to dry_run=True (count only): the
+    mutating form is destructive-adjacent and only safe after a COMPLETE re-ingest
+    from a reset checkpoint. A caller that forgets the flag must NOT mutate."""
+    import inspect
+    sig = inspect.signature(reconcile_superseded_symbols)
+    assert sig.parameters["dry_run"].default is True

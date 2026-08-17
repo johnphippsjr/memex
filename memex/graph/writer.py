@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import logging
 import os
 import uuid as uuid_module
@@ -6,11 +7,46 @@ from datetime import datetime, UTC
 from pydantic import ValidationError
 from memex.config import get_config
 from memex.graph.client import get_graph_client
+from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType
 from memex.graph.schema import SymbolNode, DecisionNode, Dependency
-from memex.extractor.treesitter import SymbolDelta
+from memex.extractor.treesitter import SymbolDelta, EXTRACTOR_VERSION
 
 logger = logging.getLogger(__name__)
+
+# BOARD #1038 - REPLAYABLE EPISODE IDENTITY (the council's single hard precondition
+# before any re-ingest touches the graph). graphiti's add_episode mints a RANDOM
+# uuid4 for the :Episodic node by default, so re-running a commit after a checkpoint
+# reset creates a DUPLICATE :Episodic node every time - which the chair called "the
+# single change that separates safe salvage from corrupting the crown jewels."
+# Deriving the uuid from (repo, commit, episode_name) makes a re-run MERGE onto the
+# same node. We detect whether the INSTALLED graphiti-core actually accepts a `uuid`
+# kwarg rather than assuming it: if it does not, replayability is NOT available and
+# a decisions re-ingest is NOT safe, so callers must check this and refuse.
+_EPISODE_UUID_NAMESPACE = uuid_module.uuid5(
+    uuid_module.NAMESPACE_URL, "https://github.com/johnphippsjr/memex/episode"
+)
+try:
+    ADD_EPISODE_ACCEPTS_UUID = "uuid" in inspect.signature(Graphiti.add_episode).parameters
+except (ValueError, TypeError):  # pragma: no cover - signature introspection guard
+    ADD_EPISODE_ACCEPTS_UUID = False
+if not ADD_EPISODE_ACCEPTS_UUID:
+    logger.warning(
+        "graphiti_core.Graphiti.add_episode does NOT accept a `uuid` kwarg in this "
+        "install - REPLAYABLE EPISODE IDS ARE UNAVAILABLE. A decisions re-ingest that "
+        "resets the checkpoint would DUPLICATE every :Episodic node. Board #1038: do "
+        "not run a full re-ingest with decisions until this is resolved."
+    )
+
+
+def deterministic_episode_uuid(repo_root, commit_sha: str, episode_name: str) -> str:
+    """Replayable :Episodic uuid derived from (repo, commit, episode_name) (board
+    #1038). Pass as add_episode(..., uuid=deterministic_episode_uuid(...)) so a
+    re-run of the same commit lands on the SAME node instead of forking a duplicate.
+    Stable across processes and runs, exactly like _DECISION_UUID_NAMESPACE."""
+    return str(uuid_module.uuid5(
+        _EPISODE_UUID_NAMESPACE, f"{repo_root or ''}|{commit_sha}|{episode_name}"
+    ))
 
 # Board #807: FalkorDB stores embeddings via its vecf32() function; Neo4j has no
 # vecf32() and stores a plain float list. GRAPH_BACKEND is a static env var set
@@ -99,7 +135,8 @@ MERGE (s:Entity {name: $name, file: $file, repo_path: $repo})
                 s.last_reinforced_at = $now,
                 s.uuid = $uuid,
                 s.group_id = $group_id,
-                s.summary = $summary
+                s.summary = $summary,
+                s.extractor_version = $extractor_version
   ON MATCH SET  s.type = 'Symbol',
                 s.kind = $kind,
                 s.signature = $signature,
@@ -107,7 +144,8 @@ MERGE (s:Entity {name: $name, file: $file, repo_path: $repo})
                 s.valid_until = NULL,
                 s.source_commit = coalesce($source_commit, s.source_commit),
                 s.last_reinforced_at = $now,
-                s.summary = $summary
+                s.summary = $summary,
+                s.extractor_version = $extractor_version
 SET s:Symbol
 """
 
@@ -169,6 +207,7 @@ async def _merge_structured_symbol(
         "uuid": str(uuid_module.uuid4()),
         "group_id": group_id,
         "summary": summary,
+        "extractor_version": EXTRACTOR_VERSION,
     }
 
     # Best-effort embedding: a failure here must degrade the symbol to
@@ -228,7 +267,8 @@ MERGE (v:Entity {name: $name, file: $file, repo_path: $repo, valid_from: $now})
                 v.last_reinforced_at = $now,
                 v.uuid = $uuid,
                 v.group_id = $group_id,
-                v.summary = $summary
+                v.summary = $summary,
+                v.extractor_version = $extractor_version
   ON MATCH SET  v.last_reinforced_at = $now
 SET v:Symbol
 """
@@ -273,6 +313,7 @@ async def _version_structured_symbol(
         "uuid": str(uuid_module.uuid4()),
         "group_id": group_id,
         "summary": summary,
+        "extractor_version": EXTRACTOR_VERSION,
     }
 
     query = _SYMBOL_VERSION_MERGE_QUERY
@@ -355,7 +396,8 @@ SET s:Symbol,
     s.name = $name, s.file = $file, s.signature = $signature,
     s.kind = $kind, s.line = $line,
     s.valid_from = coalesce(s.introduced_at, $now), s.valid_until = NULL,
-    s.source_commit = $commit, s.last_reinforced_at = $now, s.summary = $summary
+    s.source_commit = $commit, s.last_reinforced_at = $now, s.summary = $summary,
+    s.extractor_version = $extractor_version
 """
 _BITEMPORAL_NODE_QUERY_EMBEDDED = _BITEMPORAL_NODE_QUERY + (
     ", s.name_embedding = " + _EMB_OPEN + "$name_embedding" + _EMB_CLOSE
@@ -457,6 +499,7 @@ async def _write_bitemporal_symbol(
         "sid": sid, "name": sym.name, "file": sym.file, "repo": repo_root,
         "signature": sym.signature, "kind": sym.kind, "line": sym.line,
         "now": now, "commit": commit, "group_id": group_id, "summary": summary,
+        "extractor_version": EXTRACTOR_VERSION,
     }
     # 2. identity node (+ best-effort card embedding, like the other paths)
     query = _BITEMPORAL_NODE_QUERY
@@ -666,6 +709,77 @@ async def write_symbol_delta(
         # existing key doesn't disappear out from under them.
         "episodes_skipped": 0,
     }
+
+# ---------------------------------------------------------------------------
+# Board #1038 — stale-extractor reconciliation (the deliberate cleanup pass for
+# hollow-era orphans, INCLUDING the tslp parameter-name-as-function-name nodes).
+# ---------------------------------------------------------------------------
+_COUNT_STALE_EXTRACTOR_QUERY = """
+MATCH (s:Entity {repo_path: $repo})
+WHERE s.type = 'Symbol' AND s.valid_until IS NULL
+  AND (s.extractor_version IS NULL OR s.extractor_version <> $extractor_version)
+RETURN count(s) AS n
+"""
+
+_SUPERSEDE_STALE_EXTRACTOR_QUERY = """
+MATCH (s:Entity {repo_path: $repo})
+WHERE s.type = 'Symbol' AND s.valid_until IS NULL
+  AND (s.extractor_version IS NULL OR s.extractor_version <> $extractor_version)
+SET s.valid_until = $now,
+    s.superseded_by_extractor = $extractor_version,
+    s.superseded_reason = 'stale extractor_version after full re-ingest (board #1038)'
+RETURN count(s) AS n
+"""
+
+
+async def reconcile_superseded_symbols(
+    repo_root: str, extractor_version: str = EXTRACTOR_VERSION, dry_run: bool = True,
+) -> int:
+    """Close OPEN Symbol nodes in ``repo_root`` that a completed re-ingest with the
+    current extractor did NOT re-produce (board #1038).
+
+    After a FULL history re-ingest from a clean checkpoint, every symbol the fixed
+    extractor produces carries ``extractor_version = <current>``. Any still-open
+    Symbol with an OLDER or MISSING version is a hollow-era orphan: a node the OLD
+    extractor wrote under a WRONG identity (e.g. ``const f = (x) => x`` mis-named
+    "x" after its first parameter — board #1038's tslp param-name bug), which the
+    corrected extractor never MERGE-matched. Those linger forever as
+    ``valid_until IS NULL`` unless closed. THIS is the pass that finally addresses
+    the tslp parameter-name bug against the live graph.
+
+    NON-DESTRUCTIVE: stamps ``valid_until`` + ``superseded_by_extractor`` rather
+    than DELETE, so it is auditable and fully reversible.
+
+    ⚠️ ONLY SAFE AFTER A COMPLETE RE-INGEST FROM A RESET CHECKPOINT. On a partial or
+    resumed run, legitimately-unchanged symbols still carry the old version and
+    would be wrongly superseded. ``dry_run=True`` (default) only COUNTS and logs;
+    pass ``dry_run=False`` to actually close them. Returns the count.
+    """
+    client = await get_graph_client()
+    now = datetime.now(UTC)
+    res = await client.driver.execute_query(_COUNT_STALE_EXTRACTOR_QUERY, params={
+        "repo": repo_root, "extractor_version": extractor_version,
+    })
+    n = int(res.records[0].get("n") or 0) if res.records else 0
+    if dry_run:
+        logger.warning(
+            "reconcile_superseded_symbols[DRY-RUN]: %d open Symbol(s) in %s carry a "
+            "stale/missing extractor_version (current=%s). Pass dry_run=False to close "
+            "them — ONLY after a COMPLETE re-ingest from a reset checkpoint.",
+            n, repo_root, extractor_version,
+        )
+        return n
+    res2 = await client.driver.execute_query(_SUPERSEDE_STALE_EXTRACTOR_QUERY, params={
+        "repo": repo_root, "extractor_version": extractor_version, "now": now,
+    })
+    closed = int(res2.records[0].get("n") or 0) if res2.records else 0
+    logger.warning(
+        "reconcile_superseded_symbols: superseded %d stale-extractor Symbol(s) in %s "
+        "(current=%s). Reversible: each carries superseded_by_extractor + valid_until.",
+        closed, repo_root, extractor_version,
+    )
+    return closed
+
 
 #: CALLS-edge MERGE. Resolution is deliberately CONSERVATIVE: a call-site's
 #: callee name is linked only when it resolves to exactly ONE structured Symbol
@@ -1117,6 +1231,17 @@ async def write_decision(
 
     episode_name = f"decision_{commit_sha[:8]}"
 
+    # Board #1038: replayable episode identity so a re-ingest MERGEs onto the SAME
+    # :Episodic node instead of forking a duplicate. Only passed when the installed
+    # graphiti accepts a `uuid` kwarg (ADD_EPISODE_ACCEPTS_UUID, checked at import);
+    # otherwise fall back to graphiti's random uuid unchanged - replayability is
+    # simply unavailable, and that was warned loudly at import.
+    _episode_kwargs = {}
+    if ADD_EPISODE_ACCEPTS_UUID:
+        _episode_kwargs["uuid"] = deterministic_episode_uuid(repo_root, commit_sha, episode_name)
+    if entity_types:
+        _episode_kwargs["entity_types"] = entity_types
+
     # NL episode — best-effort search surface for Graphiti's own
     # search()/embeddings. Failure here does not block the structured write
     # below (mirrors write_symbol_delta's "structured node first, NL episode
@@ -1144,11 +1269,11 @@ async def write_decision(
             # the effect and inverts its apparent direction.
             source=EpisodeType.text,
             group_id=config.unified_group_id,
-            # Board #787: register :Symbol so a resolve-and-save onto an
-            # existing Symbol node overlays (keeps file/line/...) instead of
-            # wiping it. None for the live watcher (unchanged). graphiti-core
-            # ignores a None entity_types, so this is safe to always pass.
-            **({"entity_types": entity_types} if entity_types else {}),
+            # Board #787: entity_types registers :Symbol so a resolve-and-save onto
+            # an existing Symbol node overlays (keeps file/line/...) instead of
+            # wiping it. Board #1038: uuid makes the episode replayable. Both are
+            # folded into _episode_kwargs above (uuid only when graphiti accepts it).
+            **_episode_kwargs,
         )
     except Exception:
         logger.warning(

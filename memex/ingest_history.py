@@ -78,6 +78,32 @@ LIVE_GRAPH_DENYLIST = {"mem0-seed-local-verify", "graphiti-mcp-live"}
 _CODE_EXTS = {"py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "rs", "go"}
 _K8S_EXTS = {"yaml", "yml"}
 
+# BOARD #1038 - per-language CAPABILITY table. What each extension is EXPECTED to
+# contribute, so a run can ASSERT it got what it should have rather than discover
+# a whole language silently produced nothing 13 hours later.
+#   "symbols"   -> tree-sitter code symbols (fn/class). A language with files but
+#                  zero symbols is HOLLOW (the #1038 defect).
+#   "resources" -> k8s resource nodes + REFERENCES edges, NOT code symbols. Zero
+#                  code symbols here is CORRECT, so it is deliberately excluded
+#                  from the hollow check (alarming on it is how an alert gets muted).
+# Keyed identically to _CODE_EXTS / _K8S_EXTS on purpose; the two must not drift.
+LANGUAGE_CAPABILITIES = {
+    **{ext: "symbols" for ext in _CODE_EXTS},
+    **{ext: "resources" for ext in _K8S_EXTS},
+}
+
+# BOARD #1038: extension -> language for CALL-edge extraction. Mirrors the
+# extractor's own reach (memex/extractor/treesitter.py::_CALL_QUERIES): Python plus
+# JS/TS/TSX. rs/go extract SYMBOLS but have no call query yet, so they are absent
+# here and correctly produce no call edges - which is NOT a hollow condition, since
+# the hollow gate checks symbols, never call edges (the council's point: 0 call
+# edges on a language without a call query is correct, not a failure).
+_CALL_LANG_BY_EXT = {
+    "py": "python",
+    "js": "javascript", "jsx": "javascript", "mjs": "javascript", "cjs": "javascript",
+    "ts": "typescript", "tsx": "tsx",
+}
+
 
 # ---------------------------------------------------------------------------
 # git plumbing — all read-only, all via subprocess so there is no libgit2 dep.
@@ -352,14 +378,16 @@ async def ingest_commit(sha: str, repo: str, repo_id: str, stats: IngestStats,
             stats.errors += 1
             logger.warning("symbol delta failed for %s @ %s", cf.path, sha[:8], exc_info=True)
 
-        # CALLS edges are Python-only in the extractor (_CALL_QUERIES ships
-        # python only; other grammars differ per language). Symbols are still
-        # extracted for js/ts/rs/go via extract_symbol_delta above — only the
-        # call graph is python-scoped here, matching the extractor's own reach.
-        if new_content and ext == "py":
+        # CALLS edges (board #1038): Python + JS/TS/TSX, matching the extractor's
+        # own reach (_CALL_LANG_BY_EXT / treesitter._CALL_QUERIES). rs/go extract
+        # symbols but have no call query, so they map to None here and produce no
+        # edges - correct, not hollow. write_call_edges resolves conservatively
+        # (size(cs)=1), so an unresolved callee is dropped, never mis-linked.
+        call_lang = _CALL_LANG_BY_EXT.get(ext)
+        if new_content and call_lang:
             try:
                 stats.call_edges += await write_call_edges(
-                    extract_calls(cf.path, new_content, language="python"),
+                    extract_calls(cf.path, new_content, language=call_lang),
                     repo_root=repo_id,
                 )
             except Exception:
@@ -456,28 +484,51 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: Optional[List[str]] = None) -> None:
-    args = _build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    stats = asyncio.run(ingest_repo(
-        repo=args.repo, graph=args.graph, repo_id=args.repo_id, since=args.since,
-        limit=args.limit, first_parent=not args.all_parents,
-        write_decisions=not args.no_decisions, checkpoint_path=args.checkpoint,
-        allow_live=args.allow_live,
-    ))
-    print(json.dumps(stats.as_dict(), indent=2))
+def capability_report(stats: IngestStats) -> dict:
+    """BOARD #1038 - a per-language coverage line for the run summary / metrics.
 
-    # BOARD #1038 - FAIL LOUDLY ON A HOLLOW RUN.
-    #
-    # This is the single change that would have caught the original defect. The
-    # 2026-08-16 smokesignals-web run saw 4,773 files, wrote 142 symbols with 0
-    # call edges across 734 discarded files, and EXITED 0 - so every watcher,
-    # dashboard and human read it as success. An ingest that had thousands of
-    # files of a language and produced no symbols for it has not succeeded; it has
-    # failed quietly, which is worse than failing.
-    #
-    # Exit 3 (not 1) so it is distinguishable from an ordinary crash in job logs.
-    hollow = stats.hollow_extensions()
+    For every extension that had files, report how many symbols it produced and
+    whether that is acceptable for its declared capability. This is what turns
+    the failure from invisible-in-totals into unmissable-per-language, and it is
+    the shape a monitor/metric should push.
+    """
+    report = {}
+    for ext, n_files in sorted(stats.files_by_ext.items()):
+        cap = LANGUAGE_CAPABILITIES.get(ext, "unknown")
+        n_syms = stats.symbols_by_ext.get(ext, 0)
+        report[ext] = {
+            "capability": cap,
+            "files": n_files,
+            "symbols": n_syms,
+            # k8s ("resources") is expected to make 0 CODE symbols; only "symbols"
+            # languages are held to the produce-something bar.
+            "hollow": cap == "symbols" and n_files >= 5 and n_syms == 0,
+        }
+    return report
+
+
+def assert_not_hollow(stats: IngestStats, min_files: int = 5) -> List[str]:
+    """BOARD #1038 - FAIL LOUDLY ON A HOLLOW RUN. Shared by BOTH runners.
+
+    THIS is the single change that would have caught the original defect. The
+    2026-08-16 smokesignals-web run saw 4,773 files, wrote 142 symbols with 0
+    call edges across 734 discarded files, and EXITED 0 - so every watcher,
+    dashboard and human read it as success. An ingest that had thousands of files
+    of a language and produced no symbols for it has not succeeded; it has failed
+    quietly, which is worse than failing.
+
+    Lives here (in the image), NOT in either runner's main(), because the
+    PRODUCTION neo4j runner is ingest_v3.py (ConfigMap graph-catchup-neo4j-ingest),
+    which never calls this module's main(). If this logic lived only in main() it
+    would be dead code on the live path - which is exactly what it was until this
+    refactor. Both runners now call this one function.
+
+    Raises SystemExit(3) (not 1, so a hollow run is distinguishable from an
+    ordinary crash in job logs) when a "symbols" language had >= min_files files
+    and produced zero symbols. Returns the offending extensions on the happy path
+    (empty list) so a caller can log/metric them without re-deriving.
+    """
+    hollow = stats.hollow_extensions(min_files=min_files)
     if hollow:
         detail = ", ".join(
             "%s: %d files -> 0 symbols" % (e, stats.files_by_ext.get(e, 0)) for e in hollow
@@ -489,6 +540,21 @@ def main(argv: Optional[List[str]] = None) -> None:
             detail,
         )
         raise SystemExit(3)
+    return hollow
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    args = _build_parser().parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    stats = asyncio.run(ingest_repo(
+        repo=args.repo, graph=args.graph, repo_id=args.repo_id, since=args.since,
+        limit=args.limit, first_parent=not args.all_parents,
+        write_decisions=not args.no_decisions, checkpoint_path=args.checkpoint,
+        allow_live=args.allow_live,
+    ))
+    print(json.dumps(stats.as_dict(), indent=2))
+    logger.info("per-language coverage: %s", json.dumps(capability_report(stats)))
+    assert_not_hollow(stats)
 
 
 if __name__ == "__main__":
