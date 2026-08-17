@@ -217,6 +217,35 @@ def _ext(path: str) -> str:
     return path.rsplit(".", 1)[-1].lower() if "." in path else ""
 
 
+# BOARD #1046: build artifacts committed in historical commits (webpack bundles under dist/,
+# vendored node_modules, minified files) must NEVER be extracted - they yield thousands of
+# garbage minified symbols. Measured on smokesignals-web full history: 86% of extracted symbols
+# (1940 of 2254) came from dist/*.bundle.js. HEAD-populate dodged this only because dist/ is
+# gitignored at HEAD; a full-history replay sees the old committed bundles. So exclude them by
+# path here, before extraction, for BOTH the ingest_v3 fleet path and the symbols-only history
+# path (both call ingest_commit).
+_BUILD_ARTIFACT_DIRS = {
+    "node_modules", "dist", "build", ".next", ".nuxt", "out", "vendor", "coverage",
+    "bower_components", "__pycache__", ".venv", "venv", "site-packages", ".cache",
+}
+_BUILD_ARTIFACT_SUFFIXES = (
+    ".min.js", ".min.mjs", ".min.cjs", ".min.css", ".bundle.js", ".bundle.mjs",
+    ".chunk.js", "-min.js",
+)
+
+
+def is_build_artifact(path: str) -> bool:
+    """True if `path` is a generated/vendored build artifact that should not be symbol-extracted.
+    Matches on a DIRECTORY segment being a known build/dep dir, or the filename being a minified/
+    bundled file. Exact-segment match (not substring) so `dist-utils/` or `my-vendor.ts` are safe."""
+    norm = path.replace("\\", "/")
+    segs = norm.split("/")
+    if any(seg in _BUILD_ARTIFACT_DIRS for seg in segs[:-1]):
+        return True
+    fname = segs[-1].lower()
+    return any(fname.endswith(suf) for suf in _BUILD_ARTIFACT_SUFFIXES)
+
+
 def _detect_intrafile_renames(delta) -> dict:
     """A function renamed IN PLACE (foo->bar, same file, same commit) shows up as
     a removed `foo` + an added `bar` — git tracks file renames, not symbol ones.
@@ -345,6 +374,12 @@ async def ingest_commit(sha: str, repo: str, repo_id: str, stats: IngestStats,
         stats.files_seen += 1
         ext = _ext(cf.path)
         if ext not in _CODE_EXTS and ext not in _K8S_EXTS:
+            continue
+        # BOARD #1046: never extract generated/vendored build artifacts (dist/ bundles,
+        # node_modules, minified files). Skipped BEFORE the per-ext counters so they do not
+        # count toward the hollow check either. Measured: 86% of smokesignals-web full-history
+        # symbols were dist/*.bundle.js garbage without this.
+        if is_build_artifact(cf.path):
             continue
         # #1038: count per extension so a language that produces nothing is visible
         # in the progress line itself, not only in a post-hoc graph query.

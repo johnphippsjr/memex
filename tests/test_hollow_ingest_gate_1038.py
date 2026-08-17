@@ -12,7 +12,37 @@ import pytest
 
 from memex.ingest_history import (
     IngestStats, _CODE_EXTS, assert_not_hollow, capability_report, LANGUAGE_CAPABILITIES,
+    is_build_artifact,
 )
+
+
+# --- board #1046: build-artifact exclusion (86% of smokesignals full-history symbols were
+#     dist/*.bundle.js garbage before this) --------------------------------------------------
+
+def test_build_artifacts_are_excluded():
+    for p in (
+        "dist/main.b16695b6.bundle.js",          # the exact smokesignals-web offender
+        "dist/vendor.js",
+        "node_modules/react/index.js",
+        "build/static/js/app.js",
+        "src/app.min.js",
+        "public/bundle.min.js",
+        "packages/x/node_modules/y/z.ts",
+        "coverage/lcov-report/x.js",
+    ):
+        assert is_build_artifact(p), f"{p} should be excluded as a build artifact"
+
+
+def test_real_source_is_not_excluded():
+    for p in (
+        "src/app.tsx",
+        "src/pages/auth/Register.tsx",
+        "lib/dist-utils/helper.ts",              # 'dist-utils' is not 'dist' (exact segment)
+        "src/my-vendor.ts",                      # 'my-vendor' is not 'vendor'
+        "memex/ingest_history.py",
+        "components/Button.jsx",
+    ):
+        assert not is_build_artifact(p), f"{p} is real source and must NOT be excluded"
 
 
 def _stats(files_by_ext, symbols_by_ext):
